@@ -11,7 +11,8 @@ let package = Package(
         .library(name: "VoltscopeCore", targets: ["VoltscopeCore"])
     ],
     dependencies: [
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.10.0"),
+        // GRDB 7.8 is the newest release whose manifest supports Swift 6.0.
+        .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.8.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0")
     ],
     targets: [
