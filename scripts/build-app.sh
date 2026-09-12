@@ -1,24 +1,40 @@
 #!/usr/bin/env bash
 # Builds Voltscope.app from `swift build` output.
-# Usage: scripts/build-app.sh [release|debug]
+# Usage: scripts/build-app.sh [release|debug] [--universal]
 set -euo pipefail
 
 CONFIG="${1:-release}"
 SIGN_IDENTITY="-"
-if [ "${2:-}" = "--developer-id" ]; then
-    SIGN_IDENTITY="${3:?Pass the Developer ID certificate identity}"
-elif [ "$#" -gt 1 ]; then
-    echo "Usage: $0 [release|debug] [--developer-id IDENTITY]" >&2
-    exit 2
-fi
+UNIVERSAL=0
+shift $(( $# > 0 ? 1 : 0 ))
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --universal) UNIVERSAL=1 ;;
+        --developer-id)
+            shift
+            SIGN_IDENTITY="${1:?Pass the Developer ID certificate identity}"
+            ;;
+        *) echo "Usage: $0 [release|debug] [--universal] [--developer-id IDENTITY]" >&2; exit 2 ;;
+    esac
+    shift
+done
 case "$CONFIG" in release|debug) ;; *) echo "Unknown build configuration: $CONFIG" >&2; exit 2 ;; esac
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-echo "==> swift build --configuration $CONFIG"
-swift build --configuration "$CONFIG"
-
-BIN_PATH="$(swift build --configuration "$CONFIG" --show-bin-path)"
+MACOS_TRIPLE_SUFFIX="apple-macosx13.0"
+if [ "$UNIVERSAL" -eq 1 ]; then
+    echo "==> swift build --configuration $CONFIG --triple arm64-$MACOS_TRIPLE_SUFFIX"
+    swift build --configuration "$CONFIG" --triple "arm64-$MACOS_TRIPLE_SUFFIX"
+    echo "==> swift build --configuration $CONFIG --triple x86_64-$MACOS_TRIPLE_SUFFIX"
+    swift build --configuration "$CONFIG" --triple "x86_64-$MACOS_TRIPLE_SUFFIX"
+    ARM_BIN_PATH="$(swift build --configuration "$CONFIG" --triple "arm64-$MACOS_TRIPLE_SUFFIX" --show-bin-path)"
+    X86_BIN_PATH="$(swift build --configuration "$CONFIG" --triple "x86_64-$MACOS_TRIPLE_SUFFIX" --show-bin-path)"
+else
+    echo "==> swift build --configuration $CONFIG"
+    swift build --configuration "$CONFIG"
+    BIN_PATH="$(swift build --configuration "$CONFIG" --show-bin-path)"
+fi
 APP_DIR="$ROOT/build/Voltscope.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS="$CONTENTS/MacOS"
@@ -30,19 +46,24 @@ echo "==> Assembling bundle at $APP_DIR"
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS" "$RESOURCES" "$FRAMEWORKS"
 
-cp "$BIN_PATH/Voltscope" "$MACOS/Voltscope"
+if [ "$UNIVERSAL" -eq 1 ]; then
+    lipo -create "$ARM_BIN_PATH/Voltscope" "$X86_BIN_PATH/Voltscope" -output "$MACOS/Voltscope"
+else
+    cp "$BIN_PATH/Voltscope" "$MACOS/Voltscope"
+fi
 cp "$ROOT/Sources/Voltscope/Resources/Info.plist" "$CONTENTS/Info.plist"
 cp "$ROOT/Sources/Voltscope/Resources/AppIcon.icns" "$RESOURCES/AppIcon.icns"
 
 # Copy any SPM-generated resource bundles (GRDB, etc.) into Resources.
-for bundle in "$BIN_PATH"/*.bundle; do
+RESOURCE_BIN_PATH="${ARM_BIN_PATH:-$BIN_PATH}"
+for bundle in "$RESOURCE_BIN_PATH"/*.bundle; do
     if [ -d "$bundle" ]; then
         cp -R "$bundle" "$RESOURCES/"
     fi
 done
 
 # Copy any frameworks (Sparkle ships as a binary .framework) into Contents/Frameworks.
-for framework in "$BIN_PATH"/*.framework; do
+for framework in "$RESOURCE_BIN_PATH"/*.framework; do
     if [ -d "$framework" ]; then
         cp -R "$framework" "$FRAMEWORKS/"
     fi
@@ -72,6 +93,10 @@ while IFS= read -r -d '' bundle_path; do
 done < <(find "$FRAMEWORKS" -depth -type d \( -name '*.xpc' -o -name '*.app' -o -name '*.framework' -o -name '*.bundle' \) -print0)
 sign_code "$APP_DIR"
 codesign --verify --deep --strict "$APP_DIR"
+
+if [ "$UNIVERSAL" -eq 1 ]; then
+    lipo "$MACOS/Voltscope" -verify_arch arm64 x86_64
+fi
 
 echo "==> Done: $APP_DIR"
 echo "Run with: open $APP_DIR"

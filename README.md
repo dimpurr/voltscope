@@ -88,8 +88,11 @@ open build/Voltscope.app
 Create a Developer ID signed DMG when a signing identity is available:
 
 ```bash
-./scripts/build-dmg.sh --signed
+./scripts/build-dmg.sh --signed --universal
 ```
+
+The `--universal` build contains both Apple silicon (`arm64`) and Intel
+(`x86_64`) slices and is the format intended for future public releases.
 
 The complete website/GitHub release, checksum, signing, and installation
 procedure is documented in [RELEASE.md](RELEASE.md).

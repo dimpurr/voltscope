@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 # --signed: Developer ID signed, explicitly not notarized.
 # --release: Developer ID signed and notarized; requires notarization credentials.
+# --universal: build a universal2 arm64+x86_64 app and DMG.
 # --no-build: reuse and verify the existing app, including its Developer ID in signed modes.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR/.."
 MODE=dev
 NO_BUILD=0
+UNIVERSAL=0
 for arg in "$@"; do
     case "$arg" in
         --signed) MODE=signed ;;
         --release) MODE=release ;;
         --no-build) NO_BUILD=1 ;;
-        *) echo "Usage: $0 [--signed|--release] [--no-build]" >&2; exit 2 ;;
+        --universal) UNIVERSAL=1 ;;
+        *) echo "Usage: $0 [--signed|--release] [--universal] [--no-build]" >&2; exit 2 ;;
     esac
 done
 APP_BUNDLE="build/Voltscope.app"
@@ -24,11 +27,16 @@ if [ "$MODE" != dev ]; then
     fi
 fi
 if [ "$NO_BUILD" -eq 0 ]; then
-    if [ "$MODE" = dev ]; then "$SCRIPT_DIR/build-app.sh" release
-    else "$SCRIPT_DIR/build-app.sh" release --developer-id "$DEV_ID"; fi
+    BUILD_ARGS=(release)
+    if [ "$UNIVERSAL" -eq 1 ]; then BUILD_ARGS+=(--universal); fi
+    if [ "$MODE" != dev ]; then BUILD_ARGS+=(--developer-id "$DEV_ID"); fi
+    "$SCRIPT_DIR/build-app.sh" "${BUILD_ARGS[@]}"
 fi
 [ -d "$APP_BUNDLE" ] || { echo "Missing $APP_BUNDLE" >&2; exit 1; }
 codesign --verify --deep --strict "$APP_BUNDLE"
+if [ "$UNIVERSAL" -eq 1 ]; then
+    lipo "$APP_BUNDLE/Contents/MacOS/Voltscope" -verify_arch arm64 x86_64
+fi
 if [ "$MODE" != dev ]; then
     SIGNATURE_DETAILS="$(codesign -dvv "$APP_BUNDLE" 2>&1)"
     [[ "$SIGNATURE_DETAILS" == *"Authority=Developer ID Application:"* ]] || {
@@ -38,7 +46,11 @@ fi
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP_BUNDLE/Contents/Info.plist")"
 LABEL="${VOLTSCOPE_RELEASE_LABEL:-$VERSION}"
 [[ "$LABEL" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "Invalid release label" >&2; exit 2; }
-ARCH="$(lipo -archs "$APP_BUNDLE/Contents/MacOS/Voltscope" | tr ' ' '-')"
+if [ "$UNIVERSAL" -eq 1 ]; then
+    ARCH=universal2
+else
+    ARCH="$(lipo -archs "$APP_BUNDLE/Contents/MacOS/Voltscope" | tr ' ' '-')"
+fi
 DMG_PATH="build/Voltscope-$LABEL-$ARCH.dmg"
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT

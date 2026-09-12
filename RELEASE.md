@@ -15,9 +15,11 @@ credentials stay in the maintainer's Keychain, SSH configuration, or CI secrets.
    `Sources/Voltscope/Resources/Info.plist`.
 2. Update the top `CHANGELOG.md` entry, `README.md`, and any current spec that
    changed.
-3. Run `swift test`, `./scripts/build-app.sh release`, and
-   `./scripts/build-dmg.sh --signed`.
-4. Verify the app signature and DMG checksum. If notarization is unavailable,
+3. Run the tests, then build a universal2 app and DMG with
+   `./scripts/build-app.sh release --universal` and
+   `./scripts/build-dmg.sh --signed --universal`.
+4. Verify the app contains both `arm64` and `x86_64` slices with `lipo`, then
+   verify the app signature and DMG checksum. If notarization is unavailable,
    state clearly that the artifact is Developer ID signed but not notarized.
 5. Build and deploy the website, then verify the live DMG's HTTP status and
    SHA-256 against the local artifact.
