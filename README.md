@@ -24,6 +24,9 @@ The official DMG currently targets Apple silicon and requires macOS 13 or
 later. Intel Macs can build Voltscope from source until a universal release
 artifact is published.
 
+An official Homebrew Cask is not published yet; use the DMG above for the
+current release.
+
 The current artifact is Developer ID signed but not notarized. The SHA-256
 checksum is recorded in the matching GitHub Release and in the private release
 runbook. Do not describe this build as notarized.
@@ -62,13 +65,20 @@ release. The local database is stored at:
 Requirements:
 
 - macOS 13 or later
-- Xcode 16 or a compatible Swift 6 toolchain
+- Xcode 16.3+ or a compatible Swift 6.1+ toolchain
 
 Clone the repository and run the tests:
 
 ```bash
 git clone https://github.com/dimpurr/voltscope.git
 cd voltscope
+swift test -Xswiftc -swift-version -Xswiftc 5
+```
+
+The compatibility flag keeps Swift 6.1 builds working with GRDB's current
+Dispatch annotations; newer Swift toolchains may also accept plain `swift test`.
+
+```bash
 swift test
 ```
 
