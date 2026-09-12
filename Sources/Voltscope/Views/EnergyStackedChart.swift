@@ -2,6 +2,7 @@ import SwiftUI
 import Charts
 import VoltscopeCore
 
+@MainActor
 struct EnergyStackedChart: View {
     let model: HistoryChartModel
     let bucketSeconds: Int
