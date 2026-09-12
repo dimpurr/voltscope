@@ -39,7 +39,7 @@ let package = Package(
                 "Resources/Info.plist",
                 "Resources/AppIcon.svg",
                 "Resources/AppIcon.icns"
-            ],
+            ]
             // IOReport is loaded at runtime via dlopen in
             // VoltscopeCore/Sampling/IOReport.swift — no link-time framework
             // dependency, so the build works under Command Line Tools where
