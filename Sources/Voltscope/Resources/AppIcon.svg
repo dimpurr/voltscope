@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Voltscope</title>
+  <desc id="desc">A battery with a blue to teal monitoring ring and a yellow charging bolt.</desc>
+  <defs>
+    <linearGradient id="scopeGradient" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#1683FF"/>
+      <stop offset="0.52" stop-color="#1CA7E8"/>
+      <stop offset="1" stop-color="#20C997"/>
+    </linearGradient>
+    <linearGradient id="shellGradient" x1="0" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#202326"/>
+      <stop offset="1" stop-color="#343A40"/>
+    </linearGradient>
+    <linearGradient id="chargeGradient" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#32D74B"/>
+      <stop offset="1" stop-color="#45DE6A"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="8" y="8" width="496" height="496" rx="112" fill="#FFFFFF" stroke="#E1E5EA" stroke-width="3"/>
+
+  <!-- Filled annular segments keep the icon renderer deterministic at every size. -->
+  <path d="M256 84 A172 172 0 0 0 256 428 L256 404 A148 148 0 0 1 256 108 Z" fill="url(#scopeGradient)"/>
+  <path d="M256 84 A172 172 0 0 1 256 428 L256 404 A148 148 0 0 0 256 108 Z" fill="url(#scopeGradient)"/>
+  <rect x="240" y="65" width="32" height="46" rx="14" fill="#FFFFFF"/>
+  <rect x="240" y="401" width="32" height="46" rx="14" fill="#FFFFFF"/>
+
+  <rect x="145" y="210" width="222" height="92" rx="24" fill="url(#shellGradient)"/>
+  <rect x="358" y="241" width="28" height="30" rx="10" fill="#2B3035"/>
+  <rect x="162" y="227" width="188" height="58" rx="14" fill="#FFFFFF"/>
+  <rect x="177" y="240" width="158" height="32" rx="8" fill="url(#chargeGradient)"/>
+
+  <!-- The bolt is deliberately large enough to remain the memory cue at Dock size. -->
+  <path d="M258 225h29l-18 30h23l-46 54 15-38h-25z" fill="#FFB800"/>
+</svg>

@@ -1,0 +1,25 @@
+name: Bug report
+description: Report a reproducible problem in Voltscope
+title: "bug: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Steps, range selection, and any relevant sample data shape.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: macOS version, Mac model, and Voltscope version.
+    validations:
+      required: true
