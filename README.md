@@ -13,7 +13,10 @@ energy over time. Open History when you want a longer view: battery level,
 stacked App CPU attribution, hardware energy buckets, and the Apps breakdown
 share one time range.
 
-![Voltscope History](docs/assets/voltscope-history.png)
+<div align="center">
+  <img src="docs/assets/voltscope-history.png" alt="Voltscope History window showing battery level, stacked app energy, and the Energy breakdown and Apps columns" width="68%" />
+  <img src="docs/assets/voltscope-menu-panel.png" alt="Voltscope menu bar battery panel showing current charge, health, top energy use, and History actions" width="25%" />
+</div>
 
 ## Install
 
