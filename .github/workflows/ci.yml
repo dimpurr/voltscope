@@ -15,4 +15,8 @@ jobs:
         with:
           swift-version: '6.1'
       - name: Run tests
-        run: swift test
+        # GRDB still exposes Dispatch-backed values that are not Sendable on
+        # the macOS 14 SDK. Keep the package/toolchain current while compiling
+        # the package in Swift 5 compatibility mode until that dependency is
+        # annotated upstream.
+        run: swift test -Xswiftc -swift-version -Xswiftc 5
