@@ -18,7 +18,7 @@ struct EnergyStackedChart: View {
         // has four bars per day, but labeling all 28 bars makes the dates
         // collide even in a wide History window. Daily major ticks preserve
         // the context while the six-hour bars retain the intraday shape.
-        let step: Double = bucketSeconds >= 21600 ? 86400 : bucketSeconds >= 1800 ? 21600 : bucketSeconds >= 120 ? 900 : 300
+        let step: Double = bucketSeconds >= 21600 ? 86400 : bucketSeconds >= 1800 ? 21600 : bucketSeconds >= 600 ? 3600 : bucketSeconds >= 120 ? 900 : 300
         let margin = xDomain.upperBound.timeIntervalSince(xDomain.lowerBound) * 0.04
         let first = ceil((xDomain.lowerBound.timeIntervalSince1970 + margin) / step) * step
         return stride(from: first, through: xDomain.upperBound.timeIntervalSince1970 - margin, by: step)
@@ -27,6 +27,7 @@ struct EnergyStackedChart: View {
     private var tickFormat: Date.FormatStyle {
         if bucketSeconds >= 21600 { return .dateTime.month(.abbreviated).day() }
         if bucketSeconds >= 1800 { return .dateTime.month(.abbreviated).day().hour() }
+        if bucketSeconds >= 600 { return .dateTime.hour().minute() }
         return .dateTime.hour().minute()
     }
 

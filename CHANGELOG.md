@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.8.0 — 2026-09-12
+
+Added a focused six-hour history range.
+
+- Added `6H` to the single top-level time picker between `1H` and `24H`.
+- The 6H view queries ten-minute UTC-aligned buckets and uses hourly axis labels
+  for a readable near-term view.
+- Both charts, the Energy breakdown | Apps columns, refresh cadence, hover
+  buckets, and CSV export follow the selected 6H range.
+- Bundle metadata is 0.8.0 / build 7. This is a SemVer minor release because
+  it adds a backwards-compatible user-facing range.
+
 ## 0.7.2 — 2026-09-12
 
 Refined the Voltscope app icon.

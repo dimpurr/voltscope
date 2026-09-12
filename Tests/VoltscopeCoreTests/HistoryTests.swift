@@ -92,7 +92,7 @@ final class HistoryTests: XCTestCase {
     func testToolbarRangesUseMatchingBucketWidthsAndTotals() async throws {
         let db = try AppDatabase.makeInMemory()
         try await db.writeBatchSamples([sample(30_000, "old", 10), sample(6_030_000, "recent", 20), sample(7_170_000, "now", 30)])
-        for (seconds, width, expected) in [(1800.0, 30, 50), (3600.0, 120, 50), (86400.0, 1800, 60), (604800.0, 21600, 60)] {
+        for (seconds, width, expected) in [(1800.0, 30, 50), (3600.0, 120, 50), (21600.0, 600, 60), (86400.0, 1800, 60), (604800.0, 21600, 60)] {
             let points = try await db.historyEnergy(in: interval(7200 - seconds, 7200), bucketSeconds: width)
             XCTAssertEqual(points.reduce(0) { $0 + $1.energyNJ }, Int64(expected))
             for point in points { XCTAssertEqual(Int(point.date.timeIntervalSince1970) % width, 0) }

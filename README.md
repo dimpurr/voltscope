@@ -12,10 +12,11 @@ It helps answer which processes kept using energy while you were away.
 
 ## Current status
 
-**v0.7.2 — Battery History preview.** The History window includes a compact
+**v0.8.0 — Battery History preview.** The History window includes a compact
 0–100% battery trace, a range-aware stacked App CPU chart, and the original
-Energy breakdown | Apps columns. Live / 1H / 24H / 7D is the single time
-control; 7D uses four six-hour bars per day with daily axis labels.
+Energy breakdown | Apps columns. Live / 1H / 6H / 24H / 7D is the single time
+control; 6H uses ten-minute buckets and 7D uses four six-hour bars per day with
+readable time and daily axis labels.
 
 App attribution is explicitly **CPU portion only**. It does not claim to divide
 the whole device's battery drain among apps. The current artifact is Developer
