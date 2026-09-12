@@ -15,29 +15,45 @@ share one time range.
 
 ![Voltscope History](docs/assets/voltscope-history.png)
 
-## Download
+## Install
 
-**[Download the latest DMG](https://voltscope.dimp.studio/Voltscope.dmg)** ·
-**[View GitHub Releases](https://github.com/dimpurr/voltscope/releases/latest)**
+Voltscope is distributed as one signed and notarized universal2 app. The
+website DMG and the GitHub Release download are equivalent mirrors of the same
+artifact; choose whichever is more convenient.
 
-The official DMG currently targets Apple silicon and requires macOS 13 or
-later. Intel Macs can build Voltscope from source until a universal release
-artifact is published.
+### 1. Download the app
 
-An official Homebrew Cask is not published yet; use the DMG above for the
-current release.
+- **[Official website DMG](https://voltscope.dimp.studio/Voltscope.dmg)**
+- **[GitHub Release `v0.8.1`](https://github.com/dimpurr/voltscope/releases/tag/v0.8.1)**
 
-The current artifact is Developer ID signed but not notarized. The SHA-256
-checksum is recorded in the matching GitHub Release and in the private release
-runbook. Do not describe this build as notarized.
+Both links provide `Voltscope-0.8.1-universal2.dmg` for macOS 13 or later,
+with native `arm64` and `x86_64` slices.
+
+### 2. Install with Homebrew
+
+Use the maintained community tap:
+
+```bash
+brew install --cask dimpurr/tap/voltscope
+```
+
+The equivalent two-step form is `brew tap dimpurr/tap` followed by
+`brew install --cask voltscope`. Update with `brew update && brew upgrade
+--cask voltscope`, or remove it with `brew uninstall --cask voltscope`.
+
+### 3. Build from source
+
+For development or a reproducible local build, follow [Build from
+source](#build-from-source) below.
 
 ## Getting started
 
-1. Download and open `Voltscope-<version>-arm64.dmg`.
-2. Drag `Voltscope.app` to `Applications` and open it.
-3. Voltscope appears in the menu bar. Open its menu and choose **History**.
-4. Leave it running while you work. The sampler stores observations locally.
-5. Use **Live**, **1H**, **6H**, **24H**, or **7D** in the History toolbar. The
+1. Open the downloaded DMG (or install with Homebrew) and move
+   `Voltscope.app` to `Applications` if you used the DMG.
+2. Open Voltscope. It appears in the menu bar; choose **History** from its
+   menu.
+3. Leave it running while you work. The sampler stores observations locally.
+4. Use **Live**, **1H**, **6H**, **24H**, or **7D** in the History toolbar. The
    battery chart, App CPU chart, bottom columns, hover details, and CSV export
    all follow that single range.
 
@@ -91,8 +107,16 @@ Create a Developer ID signed DMG when a signing identity is available:
 ./scripts/build-dmg.sh --signed --universal
 ```
 
+For a public release, use `--release` instead. It submits the DMG to Apple
+notarization, staples the ticket, and validates the result:
+
+```bash
+./scripts/build-dmg.sh --release --universal
+```
+
 The `--universal` build contains both Apple silicon (`arm64`) and Intel
-(`x86_64`) slices and is the format intended for future public releases.
+(`x86_64`) slices. It is the artifact used by the website, GitHub Release,
+and Homebrew tap.
 
 The complete website/GitHub release, checksum, signing, and installation
 procedure is documented in [RELEASE.md](RELEASE.md).

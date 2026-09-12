@@ -1,6 +1,6 @@
 # Documentation index
 
-Status: current with release v0.8.0 (build 7).
+Status: current with release v0.8.1 (build 8).
 
 ## Source of truth
 

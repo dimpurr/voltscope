@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.1 — 2026-09-12
+
+Prepared the first public universal2 distribution release.
+
+- Ships one signed, notarized, and stapled DMG for Apple silicon and Intel Macs.
+- Keeps the website DMG and GitHub Release asset byte-for-byte identical.
+- Adds the maintained `dimpurr/homebrew-tap` installation path.
+- Bundle metadata is 0.8.1 / build 8. This is a SemVer patch release.
+
 ## 0.8.0 — 2026-09-12
 
 Added a focused six-hour history range.

@@ -9,7 +9,7 @@
 | Surface | Spec version | Implementation |
 |---|---|---|
 | Menubar dropdown | v0.5.2 | v0.5.1 disclosure + v0.5.2 inline system process rows |
-| History window | v0.8.0 | Battery-level trace plus range-aware stacked App CPU history, with the v0.6.2 chart-on-top and equal Energy breakdown ½ \| Apps ½ layout preserved; bundle icon uses the Battery scope mark |
+| History window | v0.8.1 | Battery-level trace plus range-aware stacked App CPU history, with the v0.6.2 chart-on-top and equal Energy breakdown ½ \| Apps ½ layout preserved; bundle icon uses the Battery scope mark |
 
 The v0.5 history window shipped a SwiftUI Charts stacked **area** chart that aggregated by hour regardless of selected range — for a 1H view with 10 minutes of data this rendered as one solid color block with no time variance, indistinguishable from a bug. v0.5.1 fixes that and reframes the panel around the personas in VISION.md.
 
