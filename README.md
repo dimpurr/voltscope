@@ -78,10 +78,6 @@ swift test -Xswiftc -swift-version -Xswiftc 5
 The compatibility flag keeps Swift 6.1 builds working with GRDB's current
 Dispatch annotations; newer Swift toolchains may also accept plain `swift test`.
 
-```bash
-swift test
-```
-
 Build and open a local app bundle:
 
 ```bash
@@ -118,8 +114,9 @@ compatibility reports are welcome. Read [AGENTS.md](AGENTS.md) before changing
 code; it explains which document owns each decision and the checks expected for
 a change.
 
-Keep changes focused, run `git diff --check` and `swift test`, and update the
-owning specification and [CHANGELOG.md](CHANGELOG.md) when behavior changes.
+Keep changes focused, run `git diff --check` and the test command above, and
+update the owning specification and [CHANGELOG.md](CHANGELOG.md) when behavior
+changes.
 
 ## License
 
