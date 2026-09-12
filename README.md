@@ -10,6 +10,8 @@ Voltscope records per-process energy attribution from `proc_pid_rusage`, stores
 the history locally in SQLite, and presents it in a native SwiftUI interface.
 It helps answer which processes kept using energy while you were away.
 
+![Voltscope History](docs/assets/voltscope-history.png)
+
 ## Current status
 
 **v0.8.0 — Battery History preview.** The History window includes a compact
