@@ -8,7 +8,7 @@ struct EnergyStackedChart: View {
     let xDomain: ClosedRange<Date>
     @Binding var selectedApp: String?
 
-    private func color(_ id: String) -> Color {
+    @MainActor private func color(_ id: String) -> Color {
         if id == HistoryChartModel.otherID { return .gray.opacity(0.4) }
         if id == HistoryChartModel.systemID { return .gray }
         return HistoryColors.color(id)
