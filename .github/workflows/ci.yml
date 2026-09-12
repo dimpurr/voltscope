@@ -13,10 +13,6 @@ jobs:
       - name: Select Swift toolchain
         uses: swift-actions/setup-swift@v2
         with:
-          swift-version: '6.0'
+          swift-version: '6.1'
       - name: Run tests
-        # GRDB 7.8 supports Swift 6.0's package tools version, but its
-        # Dispatch-backed internals are not yet annotated for Swift 6's
-        # complete concurrency checking. Keep CI aligned with the release
-        # toolchain while using the minimal checking mode for dependencies.
-        run: swift test -Xswiftc -strict-concurrency=minimal
+        run: swift test
