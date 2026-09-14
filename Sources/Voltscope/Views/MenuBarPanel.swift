@@ -9,17 +9,36 @@ struct MenuBarPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            panelContent
+            footer
+        }
+        .padding(14)
+        .frame(width: 340, alignment: .top)
+        .frame(minHeight: 428, alignment: .top)
+    }
+
+    @ViewBuilder
+    private var panelContent: some View {
+        if systemExpanded {
+            ScrollView(.vertical) {
+                panelContentStack
+            }
+            .frame(maxHeight: 540)
+            .scrollIndicators(.visible)
+        } else {
+            panelContentStack
+        }
+    }
+
+    private var panelContentStack: some View {
+        VStack(alignment: .leading, spacing: 12) {
             chargeHeader
             Divider()
             healthSection
             Divider()
             topAppsSection
             Divider()
-            footer
         }
-        .padding(14)
-        .frame(width: 340, alignment: .top)
-        .frame(minHeight: 428, alignment: .top)
     }
 
     // MARK: - Charge header
@@ -202,31 +221,48 @@ struct MenuBarPanel: View {
     /// Expanded shows the top 5 system processes inline, mirroring the user
     /// app section above. Symmetric layout keeps the dropdown predictable.
     private var systemRow: some View {
-        DisclosureGroup(isExpanded: $systemExpanded) {
-            VStack(alignment: .leading, spacing: 6) {
-                let systemMax = appState.systemSummary.topItems.map(\.totalEnergyNJ).max() ?? 0
-                ForEach(appState.systemSummary.topItems) { row in
-                    appRow(row, topMax: systemMax)
-                        .opacity(0.7)
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    systemExpanded.toggle()
                 }
-                if appState.systemSummary.count > appState.systemSummary.topItems.count {
-                    Text("+ \(appState.systemSummary.count - appState.systemSummary.topItems.count) more in History")
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: systemExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 12)
+                    Image(systemName: "gearshape.2")
+                        .foregroundStyle(.secondary)
+                    Text("System")
+                        .foregroundStyle(.secondary)
+                    Text(systemSummaryText)
                         .font(.caption)
                         .foregroundStyle(.tertiary)
-                        .padding(.leading, 24)
+                    Spacer()
                 }
+                .contentShape(Rectangle())
             }
-            .padding(.top, 4)
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "gearshape.2")
-                    .foregroundStyle(.secondary)
-                Text("System")
-                    .foregroundStyle(.secondary)
-                Text(systemSummaryText)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                Spacer()
+            .buttonStyle(.plain)
+            .accessibilityLabel("System processes")
+            .accessibilityValue(systemExpanded ? "Expanded" : "Collapsed")
+            .accessibilityHint("Shows system processes and their recent energy use")
+
+            if systemExpanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    let systemMax = appState.systemSummary.topItems.map(\.totalEnergyNJ).max() ?? 0
+                    ForEach(appState.systemSummary.topItems) { row in
+                        appRow(row, topMax: systemMax)
+                            .opacity(0.7)
+                    }
+                    if appState.systemSummary.count > appState.systemSummary.topItems.count {
+                        Text("+ \(appState.systemSummary.count - appState.systemSummary.topItems.count) more in History")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .padding(.leading, 24)
+                    }
+                }
+                .padding(.top, 4)
             }
         }
     }

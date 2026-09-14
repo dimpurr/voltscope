@@ -41,6 +41,17 @@ link to it from the others.
 5. Update the owning documentation and changelog for shipped behavior.
 6. Keep commits focused and explain user impact in pull requests.
 
+Release safety is a separate publication gate, not just a successful build:
+
+- A version is not public until the exact DMG and `appcast.xml` are attached to
+  the GitHub Release and the live feed, enclosure URL, asset length, version,
+  and signature pass `scripts/verify-release.py` as described in `RELEASE.md`.
+- Do not move a changelog entry from candidate/unreleased status to a dated
+  public release, or describe a version as latest, before that gate passes.
+- Candidate builds may be installed for QA, but they must be described as
+  unpublished and must not be treated as proof that the public update channel
+  works.
+
 The repository may contain a local, ignored `.private/` directory for maintainer
 notes. It is optional and must never be required to build or test the project.
 Never put passwords, private keys, API tokens, or signing credentials in Git.

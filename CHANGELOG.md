@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Make the entire `System` row tappable, keep the footer visible while the
+  expanded system list scrolls, and return the Dock icon to accessory mode
+  after the last Voltscope window closes.
 - Show the current app version beside `Check for Updates` and replace the
   generic Sparkle error with a clear unavailable-service message when the
   configured feed is not published or reachable.

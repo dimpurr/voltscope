@@ -57,7 +57,7 @@ The v0.5 dropdown stays informational and compact. v0.5.1 adds two small enhance
 
 | Change | Implementation | Why |
 |---|---|---|
-| Collapsible `▸ System (n procs · X J)` row at bottom of "Top energy use" list | `DisclosureGroup`, default collapsed | System helpers (`mdworker_shared`, Apple background services) crowded the user app list; geek users still want them on demand |
+| Collapsible `▸ System (n procs · X J)` row at bottom of "Top energy use" list | Full-width row button with an explicit chevron, default collapsed | System helpers (`mdworker_shared`, Apple background services) crowded the user app list; geek users still want them on demand |
 | Hover tooltip on each app row showing bundle ID + last-24h total | SwiftUI `.help(_:)` | Replaces a planned secondary panel; cheaper visually and cheaper to build |
 
 ### v0.6.2 layout (history window — superseded by v0.7)
@@ -313,6 +313,12 @@ system background, a chart icon, and an optional trailing open-window icon. It
 appears below the informational content and above a secondary row. The
 secondary row keeps `Settings`, `Check for Updates vX.Y.Z`, and `Quit` together in one
 horizontal row. Labels remain fully readable at the fixed width.
+
+The `System` summary row is one full-width hit target, including its text,
+summary, icon, and whitespace; only the row toggles expansion. When expanded,
+the inline system process list sits in a scroll region capped at approximately
+540 pt, while the footer actions remain visible below it. The collapsed panel
+keeps its normal compact intrinsic height.
 
 `Settings` opens the dedicated Voltscope Settings window. `Display` in the History
 toolbar remains display-only and currently contains `Group system processes`.
