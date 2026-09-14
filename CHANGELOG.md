@@ -1,22 +1,6 @@
 # Changelog
 
-## Unreleased
-
-- Make the entire `System` row tappable, keep the footer visible while the
-  expanded system list scrolls, and return the Dock icon to accessory mode
-  after the last Voltscope window closes.
-- Show the current app version beside `Check for Updates` and replace the
-  generic Sparkle error with a clear unavailable-service message when the
-  configured feed is not published or reachable.
-- Make the menu bar `Settings` action open the dedicated settings window
-  reliably on macOS 13 and newer.
-- Use a neutral system background for the `Open History` action instead of a
-  tinted accent fill.
-- Remove unnecessary ellipses from the menu bar action labels.
-- Keep the first-run Welcome context visible while Login Items is open, refresh
-  the status on return, and show a clear `Done` action after approval.
-
-## 0.9.0 — 2026-09-12
+## 0.9.0 — 2026-09-14
 
 - Added a first-run Welcome window for keeping sampling continuous at login.
 - Added native Settings with a `Launch at login` toggle backed by
@@ -28,6 +12,16 @@
 - Restored in-app update checks with a signed GitHub Releases appcast.
   Existing 0.8.1 builds remain on the legacy feed for the one-release
   migration path.
+- Makes the entire `System` row tappable, keeps the footer visible while the
+  expanded system list scrolls, and returns the Dock icon to accessory mode
+  after the last Voltscope window closes.
+- Shows the current app version beside `Check for Updates` and replaces the
+  generic Sparkle error with a clear unavailable-service message.
+- Makes the menu bar `Settings` action open the dedicated settings window
+  reliably on macOS 13 and newer.
+- Uses a neutral system background for `Open History`, removes unnecessary
+  ellipses from menu actions, and keeps the first-run Welcome context visible
+  while Login Items is open.
 - Bundle metadata is 0.9.0 / build 9. This is a SemVer minor release because
   it adds backwards-compatible user-facing features.
 

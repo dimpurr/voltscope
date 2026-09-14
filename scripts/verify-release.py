@@ -15,6 +15,7 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from typing import NoReturn
+from urllib.parse import urlparse
 
 
 SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
@@ -112,8 +113,13 @@ def main() -> None:
     declared_size = dmg_asset.get("size")
     if isinstance(declared_size, int) and declared_size != feed_length:
         fail("GitHub asset size does not match the appcast enclosure length")
-    if dmg_final_url != expected_asset_url and not dmg_final_url.startswith(expected_asset_url):
-        fail("DMG download redirected somewhere other than the GitHub release asset")
+    if dmg_final_url != expected_asset_url:
+        # GitHub's release-download URL normally redirects to its official
+        # release-assets CDN. Reject unrelated hosts while allowing that
+        # documented transport hop.
+        final_host = (urlparse(dmg_final_url).hostname or "").lower()
+        if final_host not in {"github.com", "release-assets.githubusercontent.com"}:
+            fail("DMG download redirected somewhere other than the GitHub release asset")
     if not appcast_asset.get("browser_download_url"):
         fail("GitHub appcast asset has no download URL")
 
