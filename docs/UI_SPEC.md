@@ -308,13 +308,13 @@ section above remains current for History content and range behavior.
 ### Menubar dropdown actions
 
 The dropdown is approximately 340 pt wide and about 428 to 434 pt tall at its
-normal content size. `Open History` is a full-width primary row with a subtle
-accent-tinted background, a chart icon, and an optional trailing open-window
-icon. It appears below the informational content and above a secondary row.
-The secondary row keeps `Settings…`, `Check for Updates…`, and `Quit` together
-in one horizontal row. Labels remain fully readable at the fixed width.
+normal content size. `Open History` is a full-width primary row with a neutral
+system background, a chart icon, and an optional trailing open-window icon. It
+appears below the informational content and above a secondary row. The
+secondary row keeps `Settings`, `Check for Updates`, and `Quit` together in one
+horizontal row. Labels remain fully readable at the fixed width.
 
-`Settings…` opens the standard macOS Settings window. `Display` in the History
+`Settings` opens the standard macOS Settings window. `Display` in the History
 toolbar remains display-only and currently contains `Group system processes`.
 Settings is not placed in that menu.
 
@@ -349,7 +349,10 @@ Closing the window or pressing Escape has the same effect as `Not Now`. The
 choice is recorded once in a UserDefaults onboarding marker. That marker does
 not store the toggle value. If registration reaches `requiresApproval`, the
 primary action becomes `Open Login Items` and the window explains the next
-step.
+step. Opening Login Items does not complete or dismiss Welcome: it remains as a
+temporary floating context window while System Settings is open. When the user
+returns to Voltscope, the login-item status is refreshed in place; an enabled
+item changes the primary action to `Done`.
 
 Normal login-item launches show only the menubar item. They do not open
 Welcome or History and do not take focus. The startup decision uses the

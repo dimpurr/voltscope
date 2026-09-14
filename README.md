@@ -61,7 +61,7 @@ source](#build-from-source) below.
    **Launch at login** in the Welcome window. It then appears in the menu bar.
 3. Choose **Open History** from the menu bar panel when you want to inspect
    observations. Leave Voltscope running, or enable Launch at login in
-   **Settings…**, to keep sampling continuous.
+   **Settings**, to keep sampling continuous.
 4. Use **Live**, **1H**, **6H**, **24H**, or **7D** in the History toolbar. The
    battery chart, App CPU chart, bottom columns, hover details, and CSV export
    all follow that single range.

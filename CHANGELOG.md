@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Use a neutral system background for the `Open History` action instead of a
+  tinted accent fill.
+- Remove unnecessary ellipses from the menu bar action labels.
+- Keep the first-run Welcome context visible while Login Items is open, refresh
+  the status on return, and show a clear `Done` action after approval.
+
 ## 0.9.0 — 2026-09-12
 
 - Added a first-run Welcome window for keeping sampling continuous at login.

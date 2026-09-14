@@ -254,7 +254,11 @@ struct MenuBarPanel: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
                 .frame(maxWidth: .infinity)
-                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+                .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 7))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7)
+                        .stroke(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.5)
+                }
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Open History")
@@ -263,12 +267,12 @@ struct MenuBarPanel: View {
                 Button {
                     SettingsWindowPresenter.open()
                 } label: {
-                    Label("Settings…", systemImage: "gearshape")
+                    Label("Settings", systemImage: "gearshape")
                 }
                 Button {
                     appState.checkForUpdates()
                 } label: {
-                    Label("Check for Updates…", systemImage: "arrow.down.circle")
+                    Label("Check for Updates", systemImage: "arrow.down.circle")
                 }
                 .disabled(!appState.canCheckForUpdates)
                 Button {

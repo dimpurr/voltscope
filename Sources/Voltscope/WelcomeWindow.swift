@@ -28,6 +28,7 @@ final class VoltscopeAppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         appState?.refreshLoginItemStatus()
+        welcomeController.restoreAfterExternalSettings()
     }
 
     private func presentWelcomeIfNeeded() {
@@ -46,6 +47,7 @@ final class VoltscopeAppDelegate: NSObject, NSApplicationDelegate {
 private final class WelcomeWindowController: NSObject, NSWindowDelegate {
     private weak var appState: AppState?
     private var window: NSWindow?
+    private var isWaitingForLoginItems = false
 
     func present(appState: AppState) {
         if let window, window.isVisible {
@@ -55,9 +57,14 @@ private final class WelcomeWindowController: NSObject, NSWindowDelegate {
         }
 
         self.appState = appState
-        let content = WelcomeWindow { [weak self] in
-            self?.close()
-        }
+        let content = WelcomeWindow(
+            onOpenLoginItems: { [weak self] in
+                self?.openLoginItems()
+            },
+            onClose: { [weak self] in
+                self?.close()
+            }
+        )
         .environmentObject(appState)
         let hosting = NSHostingController(rootView: content)
         let window = NSWindow(contentViewController: hosting)
@@ -74,17 +81,38 @@ private final class WelcomeWindowController: NSObject, NSWindowDelegate {
     }
 
     func close() {
+        isWaitingForLoginItems = false
         window?.close()
+    }
+
+    func openLoginItems() {
+        isWaitingForLoginItems = true
+        // Keep the first-run context visible while System Settings is in front.
+        // It is restored to a normal window when the user returns to Voltscope.
+        window?.level = .floating
+        window?.orderFrontRegardless()
+        appState?.openLoginItems()
+    }
+
+    func restoreAfterExternalSettings() {
+        guard isWaitingForLoginItems, let window else { return }
+        appState?.refreshLoginItemStatus()
+        isWaitingForLoginItems = false
+        window.level = .normal
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     func windowWillClose(_ notification: Notification) {
         appState?.completeLoginOnboarding()
+        isWaitingForLoginItems = false
         window = nil
     }
 }
 
 private struct WelcomeWindow: View {
     @EnvironmentObject private var appState: AppState
+    let onOpenLoginItems: () -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -105,7 +133,12 @@ private struct WelcomeWindow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            if appState.loginItemStatus == .requiresApproval {
+            if appState.loginItemStatus == .enabled {
+                Label("Voltscope will start automatically when you sign in.", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if appState.loginItemStatus == .requiresApproval {
                 Text("Voltscope needs your approval in Login Items before it can start at login.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -127,9 +160,15 @@ private struct WelcomeWindow: View {
 
                 Spacer()
 
-                if appState.loginItemStatus == .requiresApproval {
+                if appState.loginItemStatus == .enabled {
+                    Button("Done") {
+                        finish()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityLabel("Done")
+                } else if appState.loginItemStatus == .requiresApproval {
                     Button("Open Login Items") {
-                        appState.openLoginItems()
+                        onOpenLoginItems()
                     }
                     .buttonStyle(.borderedProminent)
                     .accessibilityLabel("Open Login Items")
