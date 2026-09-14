@@ -311,16 +311,16 @@ The dropdown is approximately 340 pt wide and about 428 to 434 pt tall at its
 normal content size. `Open History` is a full-width primary row with a neutral
 system background, a chart icon, and an optional trailing open-window icon. It
 appears below the informational content and above a secondary row. The
-secondary row keeps `Settings`, `Check for Updates`, and `Quit` together in one
+secondary row keeps `Settings`, `Check for Updates vX.Y.Z`, and `Quit` together in one
 horizontal row. Labels remain fully readable at the fixed width.
 
-`Settings` opens the standard macOS Settings window. `Display` in the History
+`Settings` opens the dedicated Voltscope Settings window. `Display` in the History
 toolbar remains display-only and currently contains `Group system processes`.
 Settings is not placed in that menu.
 
 ### Settings window
 
-Settings is a native macOS Settings scene with no sidebar and a content size of
+Settings is a native macOS window with no sidebar and a content size of
 approximately 420 × 160 pt. General contains one control:
 
 - `Launch at login`
@@ -329,8 +329,7 @@ approximately 420 × 160 pt. General contains one control:
 The toggle reflects `SMAppService.mainApp.status`, not a persisted Boolean.
 When macOS reports `requiresApproval`, Settings shows an `Open Login Items`
 button. `notFound`, registration errors, and unavailable installation paths
-show concise, actionable feedback. The standard App menu Settings command and
-Command-comma open the same window.
+show concise, actionable feedback.
 
 ### First-run Welcome window
 

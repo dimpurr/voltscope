@@ -58,16 +58,3 @@ struct SettingsView: View {
             .accessibilityLabel(message)
     }
 }
-
-@MainActor
-enum SettingsWindowPresenter {
-    /// SwiftUI's Settings scene installs the standard App menu action. Using
-    /// that action keeps this entry point available on macOS 13 without
-    /// depending on newer `openSettings` environment APIs.
-    static func open() {
-        NSApp.activate(ignoringOtherApps: true)
-        DispatchQueue.main.async {
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-        }
-    }
-}

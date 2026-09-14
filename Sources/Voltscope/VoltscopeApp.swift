@@ -31,7 +31,7 @@ struct VoltscopeApp: App {
         }
         .windowResizability(.contentMinSize)
 
-        Settings {
+        Window("Voltscope Settings", id: "settings") {
             SettingsView()
                 .environmentObject(appState)
                 .frame(width: 420, height: 160)
@@ -83,6 +83,8 @@ final class AppState: ObservableObject {
     private var eventListener: EventListener?
     private var refreshTask: Task<Void, Never>?
     private let loginItemManager: LoginItemManager
+    private var updateCheckTask: Task<Void, Never>?
+    private var updateCheckInFlight = false
 
     private let updaterController: SPUStandardUpdaterController
 
@@ -115,6 +117,10 @@ final class AppState: ObservableObject {
 
     @Published private(set) var canCheckForUpdates = false
 
+    var appVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "Unknown"
+    }
+
     var hasHandledLoginOnboarding: Bool {
         UserDefaults.standard.bool(forKey: Self.loginOnboardingHandledKey)
     }
@@ -144,8 +150,53 @@ final class AppState: ObservableObject {
     }
 
     func checkForUpdates() {
-        guard canCheckForUpdates else { return }
-        updaterController.checkForUpdates(nil)
+        guard canCheckForUpdates, !updateCheckInFlight else { return }
+        updateCheckInFlight = true
+        updateCheckTask?.cancel()
+        updateCheckTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.updateCheckInFlight = false
+                self.updateCheckTask = nil
+            }
+
+            guard await self.updateFeedIsReachable() else {
+                self.showUpdateUnavailableAlert()
+                return
+            }
+            guard !Task.isCancelled else { return }
+            self.updaterController.checkForUpdates(nil)
+        }
+    }
+
+    private func updateFeedIsReachable() async -> Bool {
+        guard let feedString = Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String,
+              let feedURL = URL(string: feedString) else {
+            return false
+        }
+
+        var request = URLRequest(url: feedURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 15
+        request.setValue("Voltscope/\(appVersion)", forHTTPHeaderField: "User-Agent")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200..<300).contains(httpResponse.statusCode) else { return false }
+            let text = String(decoding: data.prefix(256_000), as: UTF8.self)
+            return text.contains("<rss") && text.contains("<item") && text.contains("sparkle:")
+        } catch {
+            return false
+        }
+    }
+
+    private func showUpdateUnavailableAlert() {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Updates aren’t available right now"
+        alert.informativeText = "The update service is temporarily unavailable. You’re running Voltscope \(appVersion). Please try again later."
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     private func refreshUpdaterAvailability() {

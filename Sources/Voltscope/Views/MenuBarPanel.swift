@@ -265,16 +265,23 @@ struct MenuBarPanel: View {
 
             HStack(spacing: 10) {
                 Button {
-                    SettingsWindowPresenter.open()
+                    openWindow(id: "settings")
+                    NSApp.activate(ignoringOtherApps: true)
                 } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
                 Button {
                     appState.checkForUpdates()
                 } label: {
-                    Label("Check for Updates", systemImage: "arrow.down.circle")
+                    HStack(spacing: 4) {
+                        Label("Check for Updates", systemImage: "arrow.down.circle")
+                        Text("v\(appState.appVersion)")
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 .disabled(!appState.canCheckForUpdates)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Check for Updates, version \(appState.appVersion)")
                 Button {
                     NSApp.terminate(nil)
                 } label: {

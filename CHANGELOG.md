@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Show the current app version beside `Check for Updates` and replace the
+  generic Sparkle error with a clear unavailable-service message when the
+  configured feed is not published or reachable.
+- Make the menu bar `Settings` action open the dedicated settings window
+  reliably on macOS 13 and newer.
 - Use a neutral system background for the `Open History` action instead of a
   tinted accent fill.
 - Remove unnecessary ellipses from the menu bar action labels.
