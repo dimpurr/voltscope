@@ -7,7 +7,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from typing import NoReturn
 
-SPARKLE = "http://www.andymac.com/sparkle"
+SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 
 
 def fail(message: str) -> NoReturn:

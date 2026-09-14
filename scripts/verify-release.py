@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 from typing import NoReturn
 
 
-SPARKLE = "http://www.andymac.com/sparkle"
+SPARKLE = "http://www.andymatuschak.org/xml-namespaces/sparkle"
 USER_AGENT = "Voltscope-release-verifier/1"
 
 

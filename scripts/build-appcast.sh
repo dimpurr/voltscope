@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Generate and validate the signed Sparkle appcast for one final DMG.
-# The EdDSA private key is read by Sparkle from Keychain account "voltscope".
+# The EdDSA private key is supplied either by VOLTSCOPE_SPARKLE_ED_KEY (the
+# private maintainer repository's release environment) or by Keychain account
+# "voltscope" when the environment variable is absent.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -52,13 +54,19 @@ trap 'rm -rf "$STAGE"' EXIT
 cp "$DMG" "$STAGE/$ASSET_NAME"
 mkdir -p "$(dirname "$OUTPUT")"
 
-"$SPARKLE_BIN" \
-    --account voltscope \
-    --versions "$BUILD" \
-    --download-url-prefix "$ASSET_PREFIX" \
-    --link "https://github.com/dimpurr/voltscope/releases" \
-    -o "$OUTPUT" \
-    "$STAGE"
+SPARKLE_ARGS=(
+    --versions "$BUILD"
+    --download-url-prefix "$ASSET_PREFIX"
+    --link "https://github.com/dimpurr/voltscope/releases"
+    -o "$OUTPUT"
+)
+if [ -n "${VOLTSCOPE_SPARKLE_ED_KEY:-}" ]; then
+    # Pass the secret on stdin so it never appears in argv or process listings.
+    printf '%s\n' "$VOLTSCOPE_SPARKLE_ED_KEY" |
+        "$SPARKLE_BIN" --ed-key-file - "${SPARKLE_ARGS[@]}" "$STAGE"
+else
+    "$SPARKLE_BIN" --account voltscope "${SPARKLE_ARGS[@]}" "$STAGE"
+fi
 
 VERIFY_ARGS=("$OUTPUT" --version "$VERSION" --build "$BUILD" --url "$ASSET_URL")
 if [ "$NETWORK" -eq 1 ]; then VERIFY_ARGS+=(--network); fi
