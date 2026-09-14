@@ -31,8 +31,9 @@ the final network gate below passes.
 1. Prepare the candidate. Update `CFBundleShortVersionString` and increment
    `CFBundleVersion` in `Sources/Voltscope/Resources/Info.plist`. For v0.9.0
    this is `0.9.0` / `9`. Set `SUPublicEDKey` to the public half of the
-   maintainer's Sparkle EdDSA key. The private half stays in Keychain account
-   `voltscope`.
+   maintainer's Sparkle EdDSA key. The private half is supplied by the private
+   maintainer release environment; Keychain account `voltscope` is the fallback
+   when that environment variable is absent.
 
    Keep the changelog entry under `Unreleased` while the candidate is being
    tested. Update `README.md` and the current spec only for changes that are
@@ -51,9 +52,10 @@ the final network gate below passes.
      --version 0.9.0 --build 9 --tag v0.9.0
    ```
 
-   This reads the EdDSA private key from Keychain, writes `build/appcast.xml`,
-   and points the enclosure at the exact GitHub Release asset. Static
-   validation proves the XML and signature fields, not publication.
+   This reads `VOLTSCOPE_SPARKLE_ED_KEY` from the private maintainer
+   environment (or falls back to Keychain), writes `build/appcast.xml`, and
+   points the enclosure at the exact GitHub Release asset. Static validation
+   proves the XML and signature fields, not publication.
 
 4. Verify the app contains both `arm64` and `x86_64` slices with `lipo`, then
    verify the Developer ID signature, stapled notarization ticket, DMG, and
