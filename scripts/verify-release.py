@@ -66,6 +66,8 @@ def main() -> None:
         fail(f"GitHub release tag is {release.get('tag_name')!r}, expected {args.tag!r}")
     if release.get("draft"):
         fail("GitHub release is still a draft")
+    if release.get("prerelease"):
+        fail("GitHub release is marked as a prerelease; it cannot become the latest feed")
     assets = release.get("assets")
     if not isinstance(assets, list):
         fail("GitHub release response has no assets list")
