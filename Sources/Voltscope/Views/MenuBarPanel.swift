@@ -18,7 +18,8 @@ struct MenuBarPanel: View {
             footer
         }
         .padding(14)
-        .frame(width: 340)
+        .frame(width: 340, alignment: .top)
+        .frame(minHeight: 428, alignment: .top)
     }
 
     // MARK: - Charge header
@@ -239,27 +240,48 @@ struct MenuBarPanel: View {
     // MARK: - Footer
 
     private var footer: some View {
-        HStack {
+        VStack(spacing: 8) {
             Button {
                 openWindow(id: "history")
                 NSApp.activate(ignoringOtherApps: true)
             } label: {
-                Label("Open History", systemImage: "chart.bar.xaxis")
+                HStack(spacing: 8) {
+                    Label("Open History", systemImage: "chart.bar.xaxis")
+                    Spacer()
+                    Image(systemName: "arrow.up.right.square")
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity)
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
             }
-            Spacer()
-            Button {
-                appState.checkForUpdates()
-            } label: {
-                Label("Check for Updates…", systemImage: "arrow.down.circle")
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open History")
+
+            HStack(spacing: 10) {
+                Button {
+                    SettingsWindowPresenter.open()
+                } label: {
+                    Label("Settings…", systemImage: "gearshape")
+                }
+                Button {
+                    appState.checkForUpdates()
+                } label: {
+                    Label("Check for Updates…", systemImage: "arrow.down.circle")
+                }
+                .disabled(!appState.canCheckForUpdates)
+                Button {
+                    NSApp.terminate(nil)
+                } label: {
+                    Label("Quit", systemImage: "power")
+                }
             }
-            Spacer()
-            Button {
-                NSApp.terminate(nil)
-            } label: {
-                Label("Quit", systemImage: "power")
-            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .font(.caption)
+            .fixedSize(horizontal: true, vertical: false)
         }
-        .buttonStyle(.borderless)
     }
 }
 

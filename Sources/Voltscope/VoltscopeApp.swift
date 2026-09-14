@@ -4,9 +4,13 @@ import VoltscopeCore
 
 @main
 struct VoltscopeApp: App {
-    @StateObject private var appState = AppState()
+    @NSApplicationDelegateAdaptor(VoltscopeAppDelegate.self) private var appDelegate
+    @StateObject private var appState: AppState
 
     init() {
+        let state = AppState()
+        _appState = StateObject(wrappedValue: state)
+        appDelegate.configure(state)
         DockIconController.shared.install()
     }
 
@@ -24,16 +28,22 @@ struct VoltscopeApp: App {
             HistoryWindow()
                 .environmentObject(appState)
                 .frame(minWidth: 900, minHeight: 520)
-                .onAppear {
-                    DockIconController.shared.historyDidAppear()
-                }
         }
         .windowResizability(.contentMinSize)
+
+        Settings {
+            SettingsView()
+                .environmentObject(appState)
+                .frame(width: 420, height: 160)
+                .onAppear { appState.refreshLoginItemStatus() }
+        }
+
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
                     appState.checkForUpdates()
                 }
+                .disabled(!appState.canCheckForUpdates)
             }
         }
     }
@@ -64,29 +74,82 @@ final class AppState: ObservableObject {
     /// expected first-tick interval has passed.
     @Published var startedAt: Date = Date()
 
+    @Published private(set) var loginItemStatus: LoginItemStatusKind
+    @Published private(set) var loginItemFeedback: String?
+    static let loginOnboardingHandledKey = "loginItemOnboardingHandled"
+
     private(set) var database: AppDatabase?
     private var coordinator: SamplingCoordinator?
     private var eventListener: EventListener?
     private var refreshTask: Task<Void, Never>?
+    private let loginItemManager: LoginItemManager
 
     private let updaterController: SPUStandardUpdaterController
 
     init() {
-        // Sparkle: register the standard updater controller. Without a
-        // SUPublicEDKey in Info.plist (intentionally omitted until the
-        // first signed release), Sparkle will refuse to install updates
-        // and only surface "no updates available" to the user — perfect
-        // dev-time behavior.
+        let loginItemManager = LoginItemManager()
+        self.loginItemManager = loginItemManager
+        self.loginItemStatus = loginItemManager.status
+        self.loginItemFeedback = loginItemManager.feedback
+        // Sparkle: register the standard updater controller. Its availability
+        // is reflected in the menu actions once Sparkle has finished startup.
         self.updaterController = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
+        refreshUpdaterAvailability()
+        refreshLoginItemStatus()
+        Task { @MainActor [weak self] in
+            // Sparkle finishes loading its updater asynchronously. Keep the
+            // command disabled until its own readiness flag is true.
+            for _ in 0..<50 where !Task.isCancelled {
+                guard let self else { return }
+                self.refreshUpdaterAvailability()
+                if self.canCheckForUpdates { return }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+        }
         Task { await self.bootstrap() }
     }
 
+    @Published private(set) var canCheckForUpdates = false
+
+    var hasHandledLoginOnboarding: Bool {
+        UserDefaults.standard.bool(forKey: Self.loginOnboardingHandledKey)
+    }
+
+    var canEnableLaunchAtLogin: Bool {
+        loginItemManager.canEnable
+    }
+
+    func completeLoginOnboarding() {
+        UserDefaults.standard.set(true, forKey: Self.loginOnboardingHandledKey)
+    }
+
+    func refreshLoginItemStatus() {
+        loginItemManager.refresh()
+        loginItemStatus = loginItemManager.status
+        loginItemFeedback = loginItemManager.feedback
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) {
+        loginItemManager.setEnabled(enabled)
+        loginItemStatus = loginItemManager.status
+        loginItemFeedback = loginItemManager.feedback
+    }
+
+    func openLoginItems() {
+        loginItemManager.openLoginItems()
+    }
+
     func checkForUpdates() {
+        guard canCheckForUpdates else { return }
         updaterController.checkForUpdates(nil)
+    }
+
+    private func refreshUpdaterAvailability() {
+        canCheckForUpdates = updaterController.updater.canCheckForUpdates
     }
 
     private func bootstrap() async {

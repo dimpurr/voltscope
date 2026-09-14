@@ -13,6 +13,10 @@ energy over time. Open History when you want a longer view: battery level,
 stacked App CPU attribution, hardware energy buckets, and the Apps breakdown
 share one time range.
 
+Voltscope is open source under the MIT license. It is also local-only: the app
+keeps monitoring data on your Mac and sends no telemetry, analytics, or remote
+crash reports.
+
 <div align="center">
   <img src="docs/assets/voltscope-history.png" alt="Voltscope History window showing battery level, stacked app energy, and the Energy breakdown and Apps columns" width="68%" />
   <img src="docs/assets/voltscope-menu-panel.png" alt="Voltscope menu bar battery panel showing current charge, health, top energy use, and History actions" width="25%" />
@@ -27,10 +31,10 @@ artifact; choose whichever is more convenient.
 ### 1. Download the app
 
 - **[Official website DMG](https://voltscope.dimp.studio/Voltscope.dmg)**
-- **[GitHub Release `v0.8.1`](https://github.com/dimpurr/voltscope/releases/tag/v0.8.1)**
+- **[Latest GitHub Release](https://github.com/dimpurr/voltscope/releases/latest)**
 
-Both links provide `Voltscope-0.8.1-universal2.dmg` for macOS 13 or later,
-with native `arm64` and `x86_64` slices.
+Both links provide the latest universal2 DMG for macOS 13 or later, with
+native `arm64` and `x86_64` slices.
 
 ### 2. Install with Homebrew
 
@@ -53,15 +57,18 @@ source](#build-from-source) below.
 
 1. Open the downloaded DMG (or install with Homebrew) and move
    `Voltscope.app` to `Applications` if you used the DMG.
-2. Open Voltscope. It appears in the menu bar; choose **History** from its
-   menu.
-3. Leave it running while you work. The sampler stores observations locally.
+2. Open Voltscope. On the first normal launch, choose whether to enable
+   **Launch at login** in the Welcome window. It then appears in the menu bar.
+3. Choose **Open History** from the menu bar panel when you want to inspect
+   observations. Leave Voltscope running, or enable Launch at login in
+   **Settings…**, to keep sampling continuous.
 4. Use **Live**, **1H**, **6H**, **24H**, or **7D** in the History toolbar. The
    battery chart, App CPU chart, bottom columns, hover details, and CSV export
    all follow that single range.
 
-No account, helper service, or special permission is required by the current
-release. The local database is stored at:
+Core monitoring requires no account, helper service, or special permission.
+Launch at login is optional and macOS may ask for approval in Login Items. The
+local database is stored at:
 
 ```text
 ~/Library/Application Support/Voltscope/db.sqlite

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.0 — 2026-09-12
+
+- Added a first-run Welcome window for keeping sampling continuous at login.
+- Added native Settings with a `Launch at login` toggle backed by
+  `SMAppService.mainApp`.
+- Reworked the menu bar actions so `Open History` is the primary action and
+  Settings, updates, and Quit remain readable secondary actions.
+- Login-item registration now requires the app to be installed in an
+  Applications directory and reports approval or registration errors clearly.
+- Restored in-app update checks with a signed GitHub Releases appcast.
+  Existing 0.8.1 builds remain on the legacy feed for the one-release
+  migration path.
+- Bundle metadata is 0.9.0 / build 9. This is a SemVer minor release because
+  it adds backwards-compatible user-facing features.
+
 ## 0.8.1 — 2026-09-12
 
 Prepared the first public universal2 distribution release.

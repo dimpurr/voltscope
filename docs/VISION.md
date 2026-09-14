@@ -32,6 +32,8 @@ into a readable history.
   top current CPU-energy consumers.
 - A History window modeled on iPhone Battery: battery-level trace, stacked App
   CPU history, range selection, and Energy breakdown | Apps summaries.
+- A first-run Welcome prompt and an optional native main-app login item, with
+  configuration in the standard macOS Settings window.
 - Local SQLite persistence with CSV export.
 - A zero-helper baseline that works without privileged installation.
 

@@ -19,14 +19,15 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.8.1</string>
+    <string>0.9.0</string>
     <key>CFBundleVersion</key>
-    <string>8</string>
-    <!-- Sparkle is disabled until a public key and signed appcast are ready.
-         Generate the key with Sparkle's `generate_keys` tool and keep the
-         private half in the maintainer's Keychain. -->
+    <string>9</string>
+    <!-- Replace this release-preparation placeholder with the public half of
+         the EdDSA key kept by the maintainer. Never commit the private key. -->
+    <key>SUPublicEDKey</key>
+    <string>F5F6GYCv++DbXSfZHEqH2fjlL3csuKYnPWAPnx8ZvFM=</string>
     <key>SUFeedURL</key>
-    <string>https://dimpurr.github.io/voltscope/appcast.xml</string>
+    <string>https://github.com/dimpurr/voltscope/releases/latest/download/appcast.xml</string>
     <key>SUEnableAutomaticChecks</key>
     <false/>
     <key>LSApplicationCategoryType</key>

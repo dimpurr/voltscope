@@ -1,6 +1,6 @@
 # Voltscope — High Level Design
 
-> v0.7 scope update (2026-09-11): Battery History UI, linked selection and honest CPU-only attribution ship first. Earlier v0.7 network/foreground/full-device apportionment tables below describe future architecture, not delivered capabilities. Hardware channels are independent measurements; they are not guaranteed to sum to battery drain. See UI_SPEC.md and ENERGY_MODEL.md for the current contract.
+> v0.9.0 scope update (2026-09-12): Battery History UI, login-item onboarding, native Settings, and the migrated GitHub Releases Sparkle feed ship with honest CPU-only attribution. Earlier v0.7 network/foreground/full-device apportionment tables below describe future architecture, not delivered capabilities. Hardware channels are independent measurements; they are not guaranteed to sum to battery drain. The current login item is the main app registered through `SMAppService.mainApp`; it does not install a helper, daemon, or LaunchAgent. See UI_SPEC.md and ENERGY_MODEL.md for the current contract.
 
 
 > macOS-native, SwiftUI 6, public-API-first per-process energy attribution with optional privileged helper for system-level joule breakdown.
@@ -15,6 +15,7 @@
 | **v0.5** (alpha) | Bundle-ID column. CSV export. Sleep-wake event tracking. Sparkle wiring. | `bundleIdentifier`, `parentPid` columns added to `EnergyHistory`. `PowerEvents` populated. |
 | **v0.6** "Bucket honest" | System energy buckets (CPU-P/CPU-E/GPU/ANE/DRAM/Display/Wi-Fi/Fabric) via **IOReport + SMC, no root**. Total drain (V × A) integration. Storage compaction & write-volume fix. See `ENERGY_MODEL.md` for the full architecture rationale and API surface. | New `SystemBuckets` table. Retention compaction job (>24 h → per-minute, >7 d → per-hour). Sleep-throttled sampling cadence. |
 | **v0.7** "iOS Battery for macOS" | Apportionment layer: per-PID network bytes (`NStatManager`), foreground-app tracker (`NSWorkspace`), derived per-app per-bucket attribution. The first macOS app delivering a Settings → Battery–equivalent stacked breakdown. | New `NetworkUsage`, `FocusIntervals`, `AppEnergyAttribution` tables. Apportionment job materialises `AppEnergyAttribution` per closed bucket. |
+| **v0.9.0** "Persistent sampling" | Native Settings, first-run Welcome, optional main-app login item through `SMAppService.mainApp`, and a signed GitHub Releases Sparkle feed. | No schema change. UserDefaults stores only the onboarding-handled marker. |
 | **v1.0** (planned) | Optional `SMAppService` privileged helper running `powermetrics --show-process-gpu` for per-PID GPU ms/s. Refines the GPU-bucket apportionment from CPU-share proxy to true GPU-time share. Notarized release. | Optional `SystemPowerHelper` table for helper-streamed `powermetrics` plist (kept as supplementary signal even after v0.6's no-root bucket layer subsumes the headline use case). |
 | **v1.5** (planned) | Adaptive per-app energy baseline + 3σ anomaly notifications, computed against the **apportioned** per-app energy from v0.7 (not the v0.5 raw CPU number). | `EnergyBaseline` table keyed on (bundle, hourOfDay) with `meanJoulesPerSample` over apportioned values. `NotificationLog` table. |
 | **v2.0** (planned) | Tail-energy radio model (Pathak/Hu/Zhang) refining Wi-Fi/BT/cellular bucket apportionment. Sleep-period drilldown. Localization. | New event types in `PowerEvents` for radio state transitions. |
@@ -53,7 +54,7 @@
                                │ XPC (NSXPCConnection)
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│              Voltscope Helper (privileged, opt-in)              │
+│       Planned Voltscope Helper (privileged, opt-in, v1.0)       │
 │  /Library/PrivilegedHelperTools/com.dimpurr.voltscope.helper    │
 │  Installed via: SMAppService.daemon(plistName:)                 │
 │  ┌────────────────────────────────────────────────────────────┐│
@@ -76,7 +77,8 @@
 | Sampling APIs | `proc_pid_rusage(RUSAGE_INFO_V6)`, `proc_listallpids`, `IOPMPowerSource`, `NSWorkspace.runningApplications` |
 | Helper IPC | NSXPCConnection (XPC service style), Codable message types |
 | Helper installation | SMAppService (macOS 13+), `.daemon(plistName:)` |
-| Auto-update | Sparkle 2.x with EdDSA signing |
+| Main-app login item | ServiceManagement `SMAppService.mainApp` (macOS 13+), no helper process |
+| In-app updates | Sparkle 2.x with EdDSA signing; GitHub Releases appcast is the primary feed |
 | Distribution | Developer ID signed .dmg from the website and GitHub Releases; notarization is stated per release |
 | Build | Swift Package Manager + Xcode project (xcconfig managed) |
 
@@ -205,7 +207,27 @@ Populated only when helper is installed. Contains powermetrics-derived joule rat
 | `NSProcessInfo.processInfo` | `.thermalStateDidChangeNotification` | metadata field on next event |
 | `pmset -g lowpowermode` polling | Low-power-mode toggle | `'lowpower_on'` / `'lowpower_off'` |
 
-### Helper Installation Flow
+### Launch at Login Flow (current)
+
+1. At app launch, Settings presentation, app activation, and after a register or
+   unregister attempt, read `SMAppService.mainApp.status`.
+2. Map the status to `enabled`, `notRegistered`, `requiresApproval`, `notFound`,
+   or an error for the UI. The status is the only source of truth for the
+   toggle; UserDefaults stores only whether first-run onboarding was handled.
+3. Before registration, resolve the app bundle path. Allow registration only
+   from `/Applications` or the current user's `Applications` directory. A DMG,
+   Downloads, build, or development path receives an actionable move prompt.
+4. Register or unregister the main app with `SMAppService.mainApp`. Surface
+   errors without treating a failed operation as a state change. For
+   `requiresApproval`, offer the Login Items pane in System Settings.
+5. When no user-visible window is open, keep the app in accessory activation,
+   including a normal login-item launch. History, Settings, and Welcome switch
+   to regular activation while visible.
+
+### Planned Helper Installation Flow (v1.0)
+
+The following flow is future work for optional per-PID GPU sampling. It is not
+part of the current login-item setting and must not be used to implement it.
 
 1. User clicks "Install Helper" in Preferences.
 2. App calls `SMAppService.daemon(plistName: "com.dimpurr.voltscope.helper.plist").register()`.
@@ -242,6 +264,7 @@ Top-N apps determined by `SUM(energyNJ)` over the visible range. Apps outside th
 | Battery state | `IOPMPowerSource` | None | Yes |
 | Bundle identifiers | `NSWorkspace.runningApplications` | None | Yes |
 | System sleep/wake events | `NSWorkspace` notifications | None | Yes |
+| Launch at login | `SMAppService.mainApp` | None | Yes |
 | System CPU/GPU/ANE joule breakdown | `powermetrics` subprocess | **Root** | No |
 
 Voltscope ships outside the App Store (Developer ID + notarization) because the per-process sampling does not survive the sandbox's `proc_listallpids` restrictions for other-UID processes. The helper (`powermetrics`) further requires root, which is App Store–prohibited.
@@ -252,8 +275,15 @@ Voltscope ships outside the App Store (Developer ID + notarization) because the 
 
 - **Builds**: GitHub Actions on tag push, with Swift Package Manager and Xcode
   toolchains available on the runner.
-- **Signing**: Developer ID Application certificate. Sparkle EdDSA keys, when
-  enabled, stay in the maintainer's Keychain or CI secrets.
+- **Signing**: Developer ID Application certificate. Sparkle EdDSA public key is
+  embedded in the app as `SUPublicEDKey`; the private key stays in Keychain
+  account `voltscope` or CI secrets and is never stored in this repository.
+- **Update trust**: v0.9.0 uses
+  `https://github.com/dimpurr/voltscope/releases/latest/download/appcast.xml`.
+  The appcast enclosure points to the exact tagged Release asset and includes
+  Sparkle EdDSA signature, byte length, build version, short version, and
+  minimum macOS version. The 0.8.1 legacy feed is retained for one migration
+  release so those clients can discover v0.9.0.
 - **Notarization**: use Apple's notary service when credentials are configured;
   release notes must state the actual result.
 - **Packaging**: the maintained DMG script creates the application bundle.

@@ -1,6 +1,6 @@
 # Documentation index
 
-Status: current with release v0.8.1 (build 8).
+Status: prepared for v0.9.0 (build 9); publication is maintained by the release owner.
 
 ## Source of truth
 
@@ -40,8 +40,9 @@ Each durable spec should make its status obvious. Use `Current / shipped`,
 architecture looks the way it does, but they never override running code or a
 current contract.
 
-The v0.7 Battery History section in `UI_SPEC.md` is the current UI contract.
-The v0.5 and v0.6 sections are retained as rationale and regression context.
+The v0.9.0 Startup, Login Item, and Settings section plus the v0.8 Battery
+History section in `UI_SPEC.md` are the current UI contract. The v0.5 and v0.6
+sections are retained as rationale and regression context.
 The current energy contract is CPU-only app attribution; future whole-device
 apportionment ideas remain planned until code, tests, and copy support them.
 

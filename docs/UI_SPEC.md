@@ -8,7 +8,7 @@
 
 | Surface | Spec version | Implementation |
 |---|---|---|
-| Menubar dropdown | v0.5.2 | v0.5.1 disclosure + v0.5.2 inline system process rows |
+| Menubar dropdown | v0.9.0 | v0.5.1 disclosure + v0.5.2 inline system process rows + v0.9 action hierarchy |
 | History window | v0.8.1 | Battery-level trace plus range-aware stacked App CPU history, with the v0.6.2 chart-on-top and equal Energy breakdown ½ \| Apps ½ layout preserved; bundle icon uses the Battery scope mark |
 
 The v0.5 history window shipped a SwiftUI Charts stacked **area** chart that aggregated by hour regardless of selected range — for a 1H view with 10 minutes of data this rendered as one solid color block with no time variance, indistinguishable from a bug. v0.5.1 fixes that and reframes the panel around the personas in VISION.md.
@@ -297,3 +297,75 @@ This section supersedes all earlier History layout, chart, removal and legend ru
 - Keyboard-accessible interval and app selection, accessible labels, compact legends, visible query errors and clear empty states.
 
 The wider per-device apportionment model remains future work. v0.8 ships the Battery interaction model with explicit CPU-only attribution and five time ranges.
+
+## v0.9.0 — Startup, Login Item, and Settings (current)
+
+This section is the current contract for startup and app configuration. It
+supersedes the earlier dropdown footer sketch and any earlier suggestion that
+Settings belongs in the History window's `Display` menu. The v0.8 History
+section above remains current for History content and range behavior.
+
+### Menubar dropdown actions
+
+The dropdown is approximately 340 pt wide and about 428 to 434 pt tall at its
+normal content size. `Open History` is a full-width primary row with a subtle
+accent-tinted background, a chart icon, and an optional trailing open-window
+icon. It appears below the informational content and above a secondary row.
+The secondary row keeps `Settings…`, `Check for Updates…`, and `Quit` together
+in one horizontal row. Labels remain fully readable at the fixed width.
+
+`Settings…` opens the standard macOS Settings window. `Display` in the History
+toolbar remains display-only and currently contains `Group system processes`.
+Settings is not placed in that menu.
+
+### Settings window
+
+Settings is a native macOS Settings scene with no sidebar and a content size of
+approximately 420 × 160 pt. General contains one control:
+
+- `Launch at login`
+- `Start Voltscope in the menu bar when you sign in.`
+
+The toggle reflects `SMAppService.mainApp.status`, not a persisted Boolean.
+When macOS reports `requiresApproval`, Settings shows an `Open Login Items`
+button. `notFound`, registration errors, and unavailable installation paths
+show concise, actionable feedback. The standard App menu Settings command and
+Command-comma open the same window.
+
+### First-run Welcome window
+
+On the first normal app launch, before the first sample is available, Voltscope
+may show a separate Welcome window. Sampling initialization and this window
+start independently. The window uses this copy:
+
+- Title: `Welcome to Voltscope`
+- Headline: `Keep your energy history complete`
+- Explanation: Voltscope records energy only while it is running. Enabling
+  Launch at login keeps history continuous. The choice can be changed later
+  in Settings.
+- Actions: `Not Now` and `Enable at Login`
+
+Closing the window or pressing Escape has the same effect as `Not Now`. The
+choice is recorded once in a UserDefaults onboarding marker. That marker does
+not store the toggle value. If registration reaches `requiresApproval`, the
+primary action becomes `Open Login Items` and the window explains the next
+step.
+
+Normal login-item launches show only the menubar item. They do not open
+Welcome or History and do not take focus. The startup decision uses the
+onboarding marker together with `SMAppService.mainApp.status`; an enabled main
+app login item always suppresses Welcome, including when the marker predates
+the current build.
+
+Login-item registration is offered only when the app bundle resolves inside
+`/Applications` or the current user's `Applications` directory. DMG-mounted,
+Downloads, build, and development paths are rejected with a prompt to move the
+app before enabling the setting. No helper, daemon, or LaunchAgent is used.
+
+### Window and Dock behavior
+
+History, Settings, and Welcome are user-visible windows. While any of them is
+visible Voltscope uses regular activation and can appear in the Dock. When the
+last user-visible window closes, it returns to accessory activation. A login
+launch with no visible window therefore remains accessory-only while sampling
+continues.

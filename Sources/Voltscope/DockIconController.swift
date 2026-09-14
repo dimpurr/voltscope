@@ -1,8 +1,8 @@
 import AppKit
 
-/// Keeps the menubar-only default while making the History window behave like
-/// a normal document window: visible History means a Dock icon, closing it
-/// returns the app to accessory mode without terminating sampling.
+/// Keeps the menubar-only default while making user-visible windows behave like
+/// normal macOS windows. History, Settings, and first-run Welcome each show a
+/// Dock icon while open; login launches with no window remain accessory-only.
 @MainActor
 final class DockIconController: NSObject {
     static let shared = DockIconController()
@@ -19,6 +19,8 @@ final class DockIconController: NSObject {
                            name: NSWindow.didBecomeMainNotification, object: nil)
         center.addObserver(self, selector: #selector(historyWindowWillClose(_:)),
                            name: NSWindow.willCloseNotification, object: nil)
+        center.addObserver(self, selector: #selector(reconcilePolicy),
+                           name: NSApplication.didBecomeActiveNotification, object: nil)
 
         // LSUIElement starts the process in accessory mode. Make that intent
         // explicit so a future plist or SwiftUI lifecycle change cannot make
@@ -28,32 +30,35 @@ final class DockIconController: NSObject {
         }
     }
 
-    func historyDidAppear() {
+    @objc private func historyWindowAppeared(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, isUserWindow(window) else { return }
         setPolicy(.regular)
     }
 
-    @objc private func historyWindowAppeared(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, isHistoryWindow(window) else { return }
-        historyDidAppear()
-    }
-
     @objc private func historyWindowWillClose(_ notification: Notification) {
-        guard let window = notification.object as? NSWindow, isHistoryWindow(window) else { return }
+        guard let window = notification.object as? NSWindow, isUserWindow(window) else { return }
         // NSWindow is still visible during willClose. Wait for the close to
         // finish before checking, otherwise the Dock icon would be retained.
         Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 100_000_000)
-            guard let self, !self.hasVisibleHistoryWindow else { return }
-            self.setPolicy(.accessory)
+            guard let self else { return }
+            self.reconcilePolicy()
         }
     }
 
-    private var hasVisibleHistoryWindow: Bool {
-        NSApp.windows.contains { isHistoryWindow($0) && $0.isVisible }
+    @objc private func reconcilePolicy() {
+        setPolicy(hasVisibleUserWindow ? .regular : .accessory)
     }
 
-    private func isHistoryWindow(_ window: NSWindow) -> Bool {
-        window.identifier?.rawValue == "history" || window.title == "Voltscope History"
+    /// MenuBarExtra uses an NSPanel. The app's regular SwiftUI windows and the
+    /// manually hosted Welcome window are NSWindow instances, so this avoids
+    /// tying Dock behavior to localized titles or scene implementation details.
+    private var hasVisibleUserWindow: Bool {
+        NSApp.windows.contains { isUserWindow($0) && $0.isVisible }
+    }
+
+    private func isUserWindow(_ window: NSWindow) -> Bool {
+        !(window is NSPanel)
     }
 
     private func setPolicy(_ policy: NSApplication.ActivationPolicy) {
