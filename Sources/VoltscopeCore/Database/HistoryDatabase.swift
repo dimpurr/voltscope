@@ -55,18 +55,17 @@ public final class HistoryDatabase: @unchecked Sendable {
     /// opened, so `prepareDatabase` is the only hook early enough.
     ///
     /// That hook also runs for the read-only connections `DatabasePool` opens
-    /// to serve readers. There the write is rejected with `SQLITE_READONLY`,
-    /// which is expected and ignored: the writer has already stored the mode
-    /// in the file header.
+    /// to serve readers. A read-only connection is skipped: the writer has
+    /// already stored the mode in the file header, and attempting the pragma
+    /// there would only raise `SQLITE_READONLY`. On a writer the pragma is
+    /// never swallowed, so a genuine write failure surfaces instead of
+    /// silently leaving the file without incremental auto-vacuum.
     private static func makeConfiguration() -> Configuration {
         var config = Configuration()
         config.busyMode = .timeout(5.0)
         config.prepareDatabase { db in
-            do {
-                try db.execute(sql: "PRAGMA auto_vacuum = INCREMENTAL")
-            } catch let error as DatabaseError where error.resultCode == .SQLITE_READONLY {
-                // Read-only reader connection: nothing to set here.
-            }
+            if db.configuration.readonly { return }
+            try db.execute(sql: "PRAGMA auto_vacuum = INCREMENTAL")
         }
         return config
     }
@@ -215,8 +214,10 @@ public enum HistoryDatabaseError: Error, Equatable {
 }
 
 extension HistoryDatabase {
-    /// Inserts the group if it is new, otherwise refreshes `lastSeen`.
-    /// `firstSeen` is written once and never changes. Returns `App.id`.
+    /// Inserts the group if it is new, otherwise widens the seen interval:
+    /// `firstSeen` can only move earlier and `lastSeen` only later. This keeps
+    /// the interval correct even when a writer with an older timestamp commits
+    /// after a newer one. Returns `App.id`.
     @discardableResult
     public func upsertApp(
         _ db: Database,
@@ -229,7 +230,9 @@ extension HistoryDatabase {
         let sql = """
             INSERT INTO App (groupKey, bundleIdentifier, displayName, path, firstSeen, lastSeen)
             VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(groupKey) DO UPDATE SET lastSeen = excluded.lastSeen
+            ON CONFLICT(groupKey) DO UPDATE SET
+                firstSeen = MIN(firstSeen, excluded.firstSeen),
+                lastSeen = MAX(lastSeen, excluded.lastSeen)
             RETURNING id
             """
         guard let id = try Int64.fetchOne(
