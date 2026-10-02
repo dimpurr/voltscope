@@ -255,7 +255,7 @@ Fixes shipping with v0.6:
 1. Drop zero-energy rows at insert time (most of the 500-process roster has `ri_billed_energy == 0` per sample). *Implemented in 0.9.1.*
 2. Periodic SQLite `wal_checkpoint(TRUNCATE)` every 5 minutes to bound WAL growth.
 3. Background compaction job: rows older than 24 h are aggregated to per-minute per-bundle rollups; rows older than 7 days to per-hour rollups. Drops storage to <50 MB per 30-day rolling window. *Not yet implemented; planned for 0.10.0.*
-4. Add `SAMPLE_INTERVAL_SLEEP` — when `IOPMAssertion` says display is off and no AC is plugged, throttle to 30-s sampling.
+4. Add `SAMPLE_INTERVAL_SLEEP` — when `IOPMAssertion` says display is off and no AC is plugged, throttle to 30-s sampling. *Not implemented; sampling stays at 5 s.*
 
 Revised storage target: **<5 MB raw per day at active use, <50 MB lifetime for a 30-day rolling window after compaction.**
 
