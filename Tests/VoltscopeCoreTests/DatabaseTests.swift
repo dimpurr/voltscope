@@ -140,6 +140,83 @@ final class ProcessSamplerTests: XCTestCase {
         // Allow zero on extremely idle hardware but assert it doesn't crash.
         XCTAssertTrue(second.count >= 0)
     }
+
+    private func snapshot(
+        pid: Int32 = 4321,
+        start: UInt64 = 1_000,
+        energy: UInt64,
+        cpuUser: UInt64 = 0,
+        cpuSystem: UInt64 = 0,
+        wakeups: UInt64 = 0,
+        diskRead: UInt64 = 0,
+        diskWrite: UInt64 = 0
+    ) -> ProcessSnapshot {
+        ProcessSnapshot(
+            pid: pid,
+            parentPid: 1,
+            bundleIdentifier: "com.example.test",
+            processName: "TestProc",
+            path: "/usr/bin/test",
+            cpuUserNs: cpuUser,
+            cpuSystemNs: cpuSystem,
+            energyTotal: energy,
+            wakeupsTotal: wakeups,
+            diskReadTotal: diskRead,
+            diskWriteTotal: diskWrite,
+            procStartAbstime: start
+        )
+    }
+
+    private func delta(_ prior: ProcessSnapshot?, _ current: ProcessSnapshot) -> EnergySample? {
+        ProcessSampler.deltaSample(
+            from: prior,
+            to: current,
+            timestamp: 1_700_000_000_000,
+            year: 2026,
+            month: 10,
+            day: 2,
+            hour: 12,
+            minute: 0
+        )
+    }
+
+    func testZeroEnergyDeltaWithCPUWorkEmitsNoRow() {
+        let prior = snapshot(energy: 5_000, cpuUser: 100, cpuSystem: 50)
+        let current = snapshot(energy: 5_000, cpuUser: 3_100, cpuSystem: 2_050)
+        // CPU time advanced, but no new energy was billed: no row.
+        XCTAssertNil(delta(prior, current))
+    }
+
+    func testPositiveEnergyDeltaEmitsRowWithCorrectDeltas() {
+        let prior = snapshot(energy: 1_000, cpuUser: 10, cpuSystem: 5,
+                             wakeups: 2, diskRead: 100, diskWrite: 200)
+        let current = snapshot(energy: 4_500, cpuUser: 110, cpuSystem: 45,
+                               wakeups: 12, diskRead: 400, diskWrite: 700)
+        let row = delta(prior, current)
+        XCTAssertEqual(row?.energyNJ, 3_500)
+        XCTAssertEqual(row?.cpuUserNs, 100)
+        XCTAssertEqual(row?.cpuSystemNs, 40)
+        XCTAssertEqual(row?.wakeups, 10)
+        XCTAssertEqual(row?.diskReadBytes, 300)
+        XCTAssertEqual(row?.diskWriteBytes, 500)
+        XCTAssertEqual(row?.pid, 4321)
+        XCTAssertEqual(row?.processName, "TestProc")
+        XCTAssertEqual(row?.timestamp, 1_700_000_000_000)
+    }
+
+    func testCounterRegressionClampsToZeroAndEmitsNoRow() {
+        XCTAssertEqual(ProcessSampler.saturatingDelta(4_000, 9_000), 0)
+        let prior = snapshot(energy: 9_000, cpuUser: 5_000)
+        let current = snapshot(energy: 4_000, cpuUser: 100)
+        // A regressed cumulative counter (e.g. PID reuse) is treated as no delta.
+        XCTAssertNil(delta(prior, current))
+    }
+
+    func testFirstSightingEmitsNoRow() {
+        let current = snapshot(energy: 8_000, cpuUser: 500)
+        // No baseline yet: the sampler only records it.
+        XCTAssertNil(delta(nil, current))
+    }
 }
 
 final class BatterySamplerTests: XCTestCase {

@@ -56,48 +56,86 @@ public final class ProcessSampler: @unchecked Sendable {
 
             for snap in snapshots {
                 let key = ProcessKey(pid: snap.pid, startAbstime: snap.procStartAbstime)
+                // Always record the latest snapshot: the baseline advances even
+                // when the process emits no row this interval.
                 nextPrevious[key] = snap
 
-                if let prior = previous[key] {
-                    // Compute non-negative deltas; counters are monotonic but we clamp defensively.
-                    let energyDelta = saturatingDelta(snap.energyTotal, prior.energyTotal)
-                    let wakeupsDelta = saturatingDelta(snap.wakeupsTotal, prior.wakeupsTotal)
-                    let diskReadDelta = saturatingDelta(snap.diskReadTotal, prior.diskReadTotal)
-                    let diskWriteDelta = saturatingDelta(snap.diskWriteTotal, prior.diskWriteTotal)
-                    let cpuUserDelta = saturatingDelta(snap.cpuUserNs, prior.cpuUserNs)
-                    let cpuSystemDelta = saturatingDelta(snap.cpuSystemNs, prior.cpuSystemNs)
-
-                    // Skip rows that contributed nothing in this interval (reduces DB churn).
-                    if energyDelta == 0 && cpuUserDelta == 0 && cpuSystemDelta == 0 {
-                        continue
-                    }
-
-                    output.append(EnergySample(
-                        timestamp: timestamp,
-                        pid: snap.pid,
-                        bundleIdentifier: snap.bundleIdentifier,
-                        processName: snap.processName,
-                        path: snap.path,
-                        parentPid: snap.parentPid,
-                        cpuUserNs: Int64(clamping: cpuUserDelta),
-                        cpuSystemNs: Int64(clamping: cpuSystemDelta),
-                        energyNJ: Int64(clamping: energyDelta),
-                        wakeups: Int64(clamping: wakeupsDelta),
-                        diskReadBytes: Int64(clamping: diskReadDelta),
-                        diskWriteBytes: Int64(clamping: diskWriteDelta),
-                        year: year,
-                        month: month,
-                        day: day,
-                        hour: hour,
-                        minute: minute
-                    ))
+                if let row = Self.deltaSample(
+                    from: previous[key],
+                    to: snap,
+                    timestamp: timestamp,
+                    year: year,
+                    month: month,
+                    day: day,
+                    hour: hour,
+                    minute: minute
+                ) {
+                    output.append(row)
                 }
-                // First-sighting case: no row emitted; baseline only.
             }
 
             previous = nextPrevious
             return output
         }
+    }
+
+    /// Pure delta rule for one process between two consecutive snapshots.
+    ///
+    /// Returns `nil` when the interval billed no new CPU energy to the process.
+    /// `ri_billed_energy` is coarse-grained and only credited in whole units, so
+    /// most of the 300–500 processes in the roster report an unchanged
+    /// cumulative counter on any given tick. Emitting those rows produced the
+    /// overwhelming majority of historical storage growth while contributing
+    /// nothing to the energy-based History queries, which sum energy or filter
+    /// with `energy > 0`.
+    ///
+    /// `prior == nil` is the first-sighting case: the process has no baseline
+    /// yet, so nothing is emitted and the caller only records the snapshot.
+    /// A regressed counter (`current < previous`, e.g. after PID reuse) is
+    /// clamped to a zero delta and therefore also yields `nil`; the caller still
+    /// advances its baseline. CPU, wakeup, and disk deltas are reported only on
+    /// rows that carry energy, and no other field's meaning changes.
+    static func deltaSample(
+        from prior: ProcessSnapshot?,
+        to current: ProcessSnapshot,
+        timestamp: Int64,
+        year: Int,
+        month: Int,
+        day: Int,
+        hour: Int,
+        minute: Int
+    ) -> EnergySample? {
+        guard let prior else { return nil }
+
+        let energyDelta = saturatingDelta(current.energyTotal, prior.energyTotal)
+        guard energyDelta > 0 else { return nil }
+
+        // Compute non-negative deltas; counters are monotonic but we clamp defensively.
+        let wakeupsDelta = saturatingDelta(current.wakeupsTotal, prior.wakeupsTotal)
+        let diskReadDelta = saturatingDelta(current.diskReadTotal, prior.diskReadTotal)
+        let diskWriteDelta = saturatingDelta(current.diskWriteTotal, prior.diskWriteTotal)
+        let cpuUserDelta = saturatingDelta(current.cpuUserNs, prior.cpuUserNs)
+        let cpuSystemDelta = saturatingDelta(current.cpuSystemNs, prior.cpuSystemNs)
+
+        return EnergySample(
+            timestamp: timestamp,
+            pid: current.pid,
+            bundleIdentifier: current.bundleIdentifier,
+            processName: current.processName,
+            path: current.path,
+            parentPid: current.parentPid,
+            cpuUserNs: Int64(clamping: cpuUserDelta),
+            cpuSystemNs: Int64(clamping: cpuSystemDelta),
+            energyNJ: Int64(clamping: energyDelta),
+            wakeups: Int64(clamping: wakeupsDelta),
+            diskReadBytes: Int64(clamping: diskReadDelta),
+            diskWriteBytes: Int64(clamping: diskWriteDelta),
+            year: year,
+            month: month,
+            day: day,
+            hour: hour,
+            minute: minute
+        )
     }
 
     // MARK: - Internal: enumerate PIDs and read rusage
@@ -216,7 +254,7 @@ public final class ProcessSampler: @unchecked Sendable {
         return nil
     }
 
-    private func saturatingDelta(_ current: UInt64, _ previous: UInt64) -> UInt64 {
+    static func saturatingDelta(_ current: UInt64, _ previous: UInt64) -> UInt64 {
         current >= previous ? current &- previous : 0
     }
 }
