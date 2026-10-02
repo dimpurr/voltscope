@@ -21,7 +21,7 @@ its CPU-only data source cannot do so by itself.
 
 ## 2. Why v0.5 cannot answer it
 
-The v0.5 sampling architecture reads `proc_pid_rusage(RUSAGE_INFO_V6).ri_billed_energy` for every running process every 5 seconds. That field returns kernel-billed nanojoules **of the CPU portion attributed to that process**. The number is real, the granularity is per-process, the API is public — these properties are why we built on it.
+The v0.5 sampling architecture reads `proc_pid_rusage(RUSAGE_INFO_V6).ri_billed_energy` for every running process at the interval defined in the [architecture guide](HLD.md#core-flows). That field returns kernel-billed nanojoules **of the CPU portion attributed to that process**. The number is real, the granularity is per-process, the API is public — these properties are why we built on it.
 
 But on a modern MacBook, **per-process CPU energy is only 1–3 % of total battery drain**. Empirical reconciliation from a real 24-hour export:
 
@@ -115,6 +115,9 @@ unattributed energy instead of silently turning an estimate into a measurement.
 ```
 
 ### New tables (additive to v0.5 schema)
+
+The schema and storage design below will change in 0.10.0; current physical
+schema comes from the database migrations.
 
 - **`SystemBuckets`** — `(timestamp, bucketName, joules)` — bucket sampler output. Bucket names: `cpu_p`, `cpu_e`, `gpu`, `ane`, `dram`, `fabric`, `display`, `wifi`, `bt`, `sleep`. ~10 buckets × 1 sample/5 s = ~170 KB/day.
 - **`NetworkUsage`** — `(timestamp, pid, bundleIdentifier, bytesIn, bytesOut)` — per-PID byte deltas from `NStatManager`. Sample cadence 30 s.
@@ -243,6 +246,9 @@ The original HLD planned `SystemPower` table and `SMAppService` helper for v1.0.
 ---
 
 ## 7. Storage budget revision
+
+The storage model in this section will change in 0.10.0; keep its migration
+details aligned with code until then.
 
 The v0.5 HLD claimed "~3 MB raw per day (30 processes × 17,280 samples × ~50 B/row)." Empirical measurement on a real machine writes **~400 MB to ~1 GB per day** because:
 

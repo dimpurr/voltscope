@@ -6,7 +6,7 @@
 [![Latest release](https://img.shields.io/github/v/release/dimpurr/voltscope)](https://github.com/dimpurr/voltscope/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/dimpurr/voltscope/total)](https://github.com/dimpurr/voltscope/releases)
 [![License](https://img.shields.io/github/license/dimpurr/voltscope)](LICENSE)
-[![macOS 13+](https://img.shields.io/badge/macOS-13%2B-blue?logo=apple)](https://www.apple.com/macos/)
+[![macOS](https://img.shields.io/badge/macOS-supported-blue?logo=apple)](https://www.apple.com/macos/)
 
 Voltscope runs quietly in the menu bar and records which processes keep using
 energy over time. Open History when you want a longer view: battery level,
@@ -33,8 +33,9 @@ artifact; choose whichever is more convenient.
 - **[Official website DMG](https://voltscope.dimp.studio/Voltscope.dmg)**
 - **[Latest GitHub Release](https://github.com/dimpurr/voltscope/releases/latest)**
 
-Both links provide the latest universal2 DMG for macOS 13 or later, with
-native `arm64` and `x86_64` slices.
+Both links provide the latest universal2 DMG for the minimum macOS version
+recorded in [the architecture guide](docs/HLD.md), with native `arm64` and
+`x86_64` slices.
 
 ### 2. Install with Homebrew
 
@@ -70,11 +71,7 @@ source](#build-from-source) below.
 
 Core monitoring requires no account, helper service, or special permission.
 Launch at login is optional and macOS may ask for approval in Login Items. The
-local database is stored at:
-
-```text
-~/Library/Application Support/Voltscope/db.sqlite
-```
+database location is documented in the [architecture guide](docs/HLD.md#data-model).
 
 ## What Voltscope measures
 
@@ -92,7 +89,7 @@ local database is stored at:
 
 Requirements:
 
-- macOS 13 or later
+- The minimum macOS version recorded in [the architecture guide](docs/HLD.md)
 - Xcode 16.3+ or a compatible Swift 6.1+ toolchain
 
 Clone the repository and run the tests:

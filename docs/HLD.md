@@ -41,13 +41,13 @@
 │  │                     Sampling Layer                          ││
 │  │  ┌────────────────┐  ┌──────────────┐  ┌────────────────┐ ││
 │  │  │ ProcessSampler │  │BatterySampler│  │ EventListener  │ ││
-│  │  │  (5s interval) │  │ (30s interval)│ │ NSWorkspace +  │ ││
+│  │  │  (see below) │  │ (see below)│ │ NSWorkspace +  │ ││
 │  │  │ proc_pid_rusage│  │IOPMPowerSrc  │  │ IOKit notif.   │ ││
 │  │  └────────┬───────┘  └──────┬───────┘  └───────┬────────┘ ││
 │  └───────────┼─────────────────┼──────────────────┼──────────┘ │
 │  ┌───────────▼─────────────────▼──────────────────▼──────────┐│
 │  │                Persistence Layer (GRDB.swift)              ││
-│  │   ~/Library/Application Support/Voltscope/db.sqlite        ││
+│  │   Database location follows                                 ││
 │  └────────────────────────────────────────────────────────────┘│
 │                              ▲                                  │
 └──────────────────────────────┼──────────────────────────────────┘
@@ -71,13 +71,13 @@
 
 | Layer | Technology |
 |-------|------------|
-| UI | SwiftUI (macOS 13+), SwiftUI Charts, MenuBarExtra (window-style) |
+| UI | SwiftUI (minimum target: macOS 13+), SwiftUI Charts, MenuBarExtra (window-style) |
 | State | Swift Observation framework (`@Observable`); minimal Combine bridging |
 | Persistence | GRDB.swift 7.x (SQLite wrapper with type-safe queries, WAL mode, migrations) |
 | Sampling APIs | `proc_pid_rusage(RUSAGE_INFO_V6)`, `proc_listallpids`, `IOPMPowerSource`, `NSWorkspace.runningApplications` |
 | Helper IPC | NSXPCConnection (XPC service style), Codable message types |
-| Helper installation | SMAppService (macOS 13+), `.daemon(plistName:)` |
-| Main-app login item | ServiceManagement `SMAppService.mainApp` (macOS 13+), no helper process |
+| Helper installation | SMAppService, `.daemon(plistName:)` |
+| Main-app login item | ServiceManagement `SMAppService.mainApp`, no helper process |
 | In-app updates | Sparkle 2.x with EdDSA signing; GitHub Releases appcast is the primary feed |
 | Distribution | Developer ID signed .dmg from the website and GitHub Releases; notarization is stated per release |
 | Build | Swift Package Manager + Xcode project (xcconfig managed) |
@@ -86,7 +86,11 @@
 
 ## Data Model
 
-All tables live in `~/Library/Application Support/Voltscope/db.sqlite`. WAL mode, foreign-key checks on, monthly `VACUUM` triggered during app idle.
+The schema and storage design below will change in 0.10.0; the current physical
+schema is defined by the migrations in `AppDatabase.swift`.
+
+The database is stored at `~/Library/Application Support/Voltscope/db.sqlite`.
+WAL mode, foreign-key checks on, monthly `VACUUM` triggered during app idle.
 
 ### `EnergyHistory`
 

@@ -20,7 +20,8 @@ link to it from the others.
 
 ## Durable product constraints
 
-- Voltscope is macOS 13+ and uses SwiftUI, SwiftUI Charts, and Swift Package Manager.
+- The minimum macOS target is set in `Package.swift`; Voltscope uses SwiftUI,
+  SwiftUI Charts, and Swift Package Manager.
 - The History toolbar has one time control, and all history surfaces follow that
   selection. Its options and bucket sizes are owned by `docs/UI_SPEC.md`.
 - App attribution is recorded CPU energy only. It must not be described as a

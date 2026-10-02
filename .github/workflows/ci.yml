@@ -16,6 +16,8 @@ jobs:
           swift-version: '6.1'
       - name: Check documentation consistency
         run: python3 scripts/check-docs.py
+      - name: Test documentation checker
+        run: python3 scripts/test-check-docs.py
       - name: Run tests
         # GRDB still exposes Dispatch-backed values that are not Sendable on
         # the macOS 14 SDK. Keep the package/toolchain current while compiling
