@@ -32,6 +32,20 @@ private final class RunOverlapRecorder: @unchecked Sendable {
     }
 }
 
+private final class ImportGate: @unchecked Sendable {
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var count = 0
+
+    var calls: Int { lock.lock(); defer { lock.unlock() }; return count }
+
+    func blockFirstCall() {
+        lock.lock(); count += 1; let shouldBlock = count == 1; lock.unlock()
+        if shouldBlock { entered.signal(); release.wait() }
+    }
+}
+
 private struct ImportTotals {
     let appEnergy: Int64
     let bucketEnergy: Int64
@@ -334,6 +348,139 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         XCTAssertEqual(tiers.0, 0, "this 8–25 day interval exists only in the minute tier")
         XCTAssertNotNil(tiers.1)
         XCTAssertNotNil(tiers.2)
+    }
+
+    func testWALSnapshotImportsUncheckpointedRowsWithoutChangingOriginalSidecars() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        var configuration = Configuration()
+        configuration.prepareDatabase { db in
+            try db.execute(sql: "PRAGMA journal_mode=WAL")
+            try db.execute(sql: "PRAGMA wal_autocheckpoint=0")
+        }
+        let writer = try DatabaseQueue(path: legacyURL.path, configuration: configuration)
+        let timestamp: Int64 = 1_700_004_000_000
+        try await writer.write { db in
+            var lateSample = EnergySample(timestamp: timestamp, pid: 77, bundleIdentifier: "com.test.wal", processName: "WAL",
+                                          path: nil, parentPid: nil, cpuUserNs: 1, cpuSystemNs: 2, energyNJ: 999,
+                                          wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0,
+                                          year: 2023, month: 11, day: 14, hour: 23, minute: 0)
+            try lateSample.insert(db)
+        }
+        let walURL = URL(fileURLWithPath: legacyURL.path + "-wal")
+        let shmURL = URL(fileURLWithPath: legacyURL.path + "-shm")
+        XCTAssertGreaterThan((try FileManager.default.attributesOfItem(atPath: walURL.path)[.size] as? NSNumber)?.intValue ?? 0, 0)
+        let originalWAL = try Data(contentsOf: walURL)
+        let originalSHM = try Data(contentsOf: shmURL)
+
+        let history = try makeHistory()
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1)).run()
+        let imported = try await history.dbPool.read { db in
+            (try Int64.fetchOne(db, sql: "SELECT SUM(energyNJ) FROM AppUsageHour WHERE metricVersion=0") ?? 0,
+             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0 AND energyNJ=999") ?? 0)
+        }
+        XCTAssertEqual(imported.0, 999 + 203)
+        XCTAssertEqual(imported.1, 1)
+        XCTAssertEqual(try Data(contentsOf: walURL), originalWAL)
+        XCTAssertEqual(try Data(contentsOf: shmURL), originalSHM)
+        withExtendedLifetime(writer) {}
+    }
+
+    func testWatermarkHandoffRollsUpCurrentRawAndIncludesPositiveLegacyEnergyAfterAnchor() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        let base: Int64 = 1_700_000_000_000
+        let hourStart = base + 12 * 3_600_000
+        let writer = try DatabaseQueue(path: legacyURL.path)
+        try await writer.write { db in
+            var afterAnchor = EnergySample(timestamp: hourStart + 40 * 60_000, pid: 88, bundleIdentifier: "com.test.late",
+                                           processName: "Late", path: nil, parentPid: nil, cpuUserNs: 5, cpuSystemNs: 5,
+                                           energyNJ: 701, wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0,
+                                           year: 2023, month: 11, day: 14, hour: 12, minute: 40)
+            try afterAnchor.insert(db)
+        }
+        let history = try makeHistory()
+        try await history.writeTick(timestamp: hourStart + 10 * 60_000,
+                                    apps: [SampledApp(groupKey: "com.current", bundleIdentifier: "com.current", displayName: "Current", pid: 1, energyNJ: 17, cpuNs: 1)],
+                                    buckets: [], coverage: SampleCoverage(visible: 1, unreadable: 0))
+        try await history.writeTick(timestamp: hourStart + 20 * 60_000,
+                                    apps: [SampledApp(groupKey: "com.current", bundleIdentifier: "com.current", displayName: "Current", pid: 1, energyNJ: 23, cpuNs: 1)],
+                                    buckets: [], coverage: SampleCoverage(visible: 1, unreadable: 0))
+        let fixedNow = Date(timeIntervalSince1970: Double(hourStart + 30 * 60_000) / 1000)
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1), now: { fixedNow }).run()
+
+        let interval = DateInterval(start: Date(timeIntervalSince1970: Double(hourStart) / 1000),
+                                    end: Date(timeIntervalSince1970: Double(hourStart + 3_600_000) / 1000))
+        for range in [HistoryRange.h1, .h6, .h24, .d7] {
+            let current = try await history.historyEnergy(in: interval, range: range, metricVersion: EnergyMetric.currentVersion)
+            let legacy = try await history.historyEnergy(in: interval, range: range, metricVersion: EnergyMetric.legacyVersion)
+            XCTAssertEqual(current.reduce(Int64(0)) { $0 + $1.energyNJ }, 40, "current-version hand-off total for \(range.rawValue)")
+            XCTAssertEqual(legacy.reduce(Int64(0)) { $0 + $1.energyNJ }, 203 + 701, "legacy post-anchor total for \(range.rawValue)")
+        }
+        let watermarks = try await history.dbPool.read { db in
+            (try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='rollup.minuteWatermark'"),
+             try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='rollup.hourWatermark'"))
+        }
+        XCTAssertEqual(watermarks.0, String((hourStart + 40 * 60_000) / 60_000))
+        XCTAssertEqual(watermarks.1, String(hourStart / 3_600_000))
+        withExtendedLifetime(writer) {}
+    }
+
+    func testCancelledWaiterLeavesRunLockQueueAndNeverStartsImport() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 2)
+        let history = try makeHistory()
+        let gate = ImportGate()
+        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1), progress: { _ in
+            gate.blockFirstCall()
+        })
+        let holder = Task { try await importer.run() }
+        XCTAssertEqual(gate.entered.wait(timeout: .now() + 5), .success)
+        let waiter = Task { try await importer.run() }
+        try await Task.sleep(for: .milliseconds(50))
+        waiter.cancel()
+        gate.release.signal()
+        try await holder.value
+        do {
+            try await waiter.value
+            XCTFail("cancelled lock waiter must not start another run")
+        } catch is CancellationError {
+            // The waiter is removed while the holder continues.
+        }
+        XCTAssertEqual(gate.calls, 25, "the holder should visit each of the fixture's 25 hours exactly once")
+        let state = try await history.dbPool.read { db in try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'") }
+        XCTAssertEqual(state, "done")
+    }
+
+    func testCancellationDuringBatteryCopyDoesNotMarkImportFailedAndResumes() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        let history = try makeHistory()
+        let box = ImportTaskBox()
+        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1), batteryCopyProgress: { copied in
+            if copied == 1 { box.cancel() }
+        })
+        let task = importer.start()
+        box.set(task)
+        do {
+            try await task.value
+            XCTFail("cancellation during battery copy should interrupt the transaction")
+        } catch is CancellationError {
+            // The battery transaction rolls back and the import remains resumable.
+        }
+        let stateAndBatteryCount = try await history.dbPool.read { db in
+            (try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'"),
+             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM BatteryStatus") ?? 0)
+        }
+        XCTAssertEqual(stateAndBatteryCount.0, "verifying")
+        XCTAssertEqual(stateAndBatteryCount.1, 0)
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1)).run()
+        let resumedState = try await history.dbPool.read { db in try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'") }
+        XCTAssertEqual(resumedState, "done")
     }
 
     func testCancelledImportResumesAndMatchesUninterruptedResult() async throws {

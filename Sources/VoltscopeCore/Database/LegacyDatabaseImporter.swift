@@ -4,15 +4,39 @@ import Darwin
 
 private actor LegacyImportRunLock {
     private var isLocked = false
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Void, Error>
+    }
+    private var waiters: [Waiter] = []
 
-    func lock() async {
+    func lock() async throws {
+        try Task.checkCancellation()
         if !isLocked { isLocked = true; return }
-        await withCheckedContinuation { waiters.append($0) }
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                waiters.append(Waiter(id: id, continuation: continuation))
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id) }
+        }
     }
 
     func unlock() {
-        if waiters.isEmpty { isLocked = false } else { waiters.removeFirst().resume() }
+        if waiters.isEmpty {
+            isLocked = false
+        } else {
+            waiters.removeFirst().continuation.resume()
+        }
+    }
+
+    private func cancelWaiter(_ id: UUID) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        let waiter = waiters.remove(at: index)
+        waiter.continuation.resume(throwing: CancellationError())
     }
 }
 
@@ -94,10 +118,11 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
     public let timebase: LegacyTimebase
     public let rawRetentionDays: Int
     public let progressHandler: (@Sendable (LegacyImportProgress) -> Void)?
+    private let batteryCopyProgress: (@Sendable (Int) -> Void)?
     private let runLock = LegacyImportRunLock()
     private let now: @Sendable () -> Date
 
-    public init(
+    public convenience init(
         history: HistoryDatabase,
         legacyURL: URL,
         timebase: LegacyTimebase = .system,
@@ -105,11 +130,25 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         rawRetentionDays: Int = 7,
         progress: (@Sendable (LegacyImportProgress) -> Void)? = nil
     ) {
+        self.init(history: history, legacyURL: legacyURL, timebase: timebase, now: now,
+                  rawRetentionDays: rawRetentionDays, progress: progress, batteryCopyProgress: nil)
+    }
+
+    init(
+        history: HistoryDatabase,
+        legacyURL: URL,
+        timebase: LegacyTimebase = .system,
+        now: @escaping @Sendable () -> Date = Date.init,
+        rawRetentionDays: Int = 7,
+        progress: (@Sendable (LegacyImportProgress) -> Void)? = nil,
+        batteryCopyProgress: (@Sendable (Int) -> Void)?
+    ) {
         self.history = history
         self.legacyURL = legacyURL
         self.timebase = timebase
         self.rawRetentionDays = max(0, rawRetentionDays)
         self.progressHandler = progress
+        self.batteryCopyProgress = batteryCopyProgress
         self.now = now
     }
 
@@ -122,7 +161,11 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
     /// Imports hour by hour. The cursor update commits with each hour's rows,
     /// making a cancelled or interrupted run safe to resume.
     public func run() async throws {
-        await runLock.lock()
+        try await runLock.lock()
+        if Task.isCancelled {
+            await runLock.unlock()
+            throw CancellationError()
+        }
         do {
             try await performRun()
             await runLock.unlock()
@@ -136,9 +179,11 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         guard timebase.numer > 0, timebase.denom > 0 else { throw LegacyImportError.invalidTimebase }
         guard FileManager.default.fileExists(atPath: legacyURL.path) else { throw CocoaError(.fileNoSuchFile) }
 
+        let snapshot = try Self.prepareLegacySnapshot(at: legacyURL)
+        defer { snapshot.cleanup?() }
         var configuration = Configuration()
         configuration.readonly = true
-        let sourceURL = URL(string: "file:\(legacyURL.path)?mode=ro&immutable=1")!
+        let sourceURL = URL(string: "file:\(snapshot.url.path)?mode=ro\(snapshot.immutable ? "&immutable=1" : "")")!
         let source = try DatabaseQueue(path: sourceURL.absoluteString, configuration: configuration)
         let schema = try Self.sourceRead(source) { db in
             Set(try String.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE type = 'table'"))
@@ -186,7 +231,7 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
                     }
                     try Self.putMeta(db, key: "legacy.cursorHour", value: String(hour))
                     try Self.putMeta(db, key: "legacy.state", value: LegacyImportState.importing.rawValue)
-                    if hour == maxHour { try Self.advanceImportWatermarks(db, anchor: anchor) }
+                    if hour == maxHour { try Self.advanceImportWatermarks(db) }
                 }
                 progressHandler?(LegacyImportProgress(importedHours: hour - minHour + 1, totalHours: totalHours))
             }
@@ -195,7 +240,7 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         try await setMeta("legacy.state", value: LegacyImportState.verifying.rawValue)
         do {
             try await history.dbPool.write { db in
-                try Self.copyBatteryAndEvents(source: source, db: db)
+                try Self.copyBatteryAndEvents(source: source, db: db, progress: self.batteryCopyProgress)
             }
             let oldTotals = try Self.sourceRead(source) { src in try Self.readVerificationTotals(src, rawCutoff: rawCutoff) }
             try await history.dbPool.read { dst in try Self.verify(oldTotals, dst) }
@@ -321,11 +366,89 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         }
     }
 
-    private static func advanceImportWatermarks(_ db: Database, anchor: Int64) throws {
-        for (key, candidate) in [("rollup.minuteWatermark", anchor / 60_000), ("rollup.hourWatermark", anchor / 3_600_000)] {
-            let current = try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key = ?", arguments: [key]).flatMap(Int64.init)
-            try putMeta(db, key: key, value: String(max(current ?? Int64.min, candidate)))
+    private static func advanceImportWatermarks(_ db: Database) throws {
+        let minuteTableMax = try Int64.fetchOne(db, sql: "SELECT MAX(minute) FROM AppUsageMinute WHERE metricVersion=0")
+        let bucketMinuteMax = try Int64.fetchOne(db, sql: "SELECT MAX(minute) FROM BucketMinute WHERE metricVersion=0")
+        let hourTableMax = try Int64.fetchOne(db, sql: "SELECT MAX(hour) FROM AppUsageHour WHERE metricVersion=0")
+        let bucketHourMax = try Int64.fetchOne(db, sql: "SELECT MAX(hour) FROM BucketHour WHERE metricVersion=0")
+        let minuteCurrent = try watermark(db, key: "rollup.minuteWatermark")
+        let hourCurrent = try watermark(db, key: "rollup.hourWatermark")
+        let minuteTarget = [minuteCurrent, minuteTableMax, bucketMinuteMax].compactMap { $0 }.max()
+        let hourTarget = [hourCurrent, hourTableMax, bucketHourMax].compactMap { $0 }.max()
+
+        if let minuteTarget {
+            try foldCurrentRawIntoTiers(db, timeColumn: "minute", divisor: 60_000,
+                                        from: minuteCurrent.map { ($0 + 1) * 60_000 } ?? Int64.min,
+                                        before: (minuteTarget + 1) * 60_000)
+            try putMeta(db, key: "rollup.minuteWatermark", value: String(minuteTarget))
         }
+        if let hourTarget {
+            try foldCurrentRawIntoTiers(db, timeColumn: "hour", divisor: 3_600_000,
+                                        from: hourCurrent.map { ($0 + 1) * 3_600_000 } ?? Int64.min,
+                                        before: (hourTarget + 1) * 3_600_000)
+            try putMeta(db, key: "rollup.hourWatermark", value: String(hourTarget))
+        }
+    }
+
+    private static func watermark(_ db: Database, key: String) throws -> Int64? {
+        try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key = ?", arguments: [key]).flatMap(Int64.init)
+    }
+
+    private static func foldCurrentRawIntoTiers(_ db: Database, timeColumn: String, divisor: Int64, from lowerBound: Int64, before cutoff: Int64) throws {
+        let appSQL = """
+            INSERT INTO AppUsage\(timeColumn == "hour" ? "Hour" : "Minute")
+                (\(timeColumn), appId, metricVersion, energyNJ, cpuNs, wakeups, diskReadBytes, diskWriteBytes, samples)
+            SELECT ts / ?, appId, metricVersion, SUM(energyNJ), SUM(cpuNs), SUM(wakeups),
+                   SUM(diskReadBytes), SUM(diskWriteBytes), COUNT(*)
+            FROM AppSampleRaw WHERE ts >= ? AND ts < ? AND metricVersion=?
+            GROUP BY ts / ?, appId, metricVersion
+            ON CONFLICT(\(timeColumn), appId, metricVersion) DO UPDATE SET
+                energyNJ=energyNJ+excluded.energyNJ, cpuNs=cpuNs+excluded.cpuNs,
+                wakeups=wakeups+excluded.wakeups, diskReadBytes=diskReadBytes+excluded.diskReadBytes,
+                diskWriteBytes=diskWriteBytes+excluded.diskWriteBytes, samples=samples+excluded.samples
+            """
+        try db.execute(sql: appSQL, arguments: [divisor, lowerBound, cutoff, EnergyMetric.currentVersion, divisor])
+
+        let bucketSQL = """
+            INSERT INTO Bucket\(timeColumn == "hour" ? "Hour" : "Minute")
+                (\(timeColumn), bucketId, metricVersion, energyNJ)
+            SELECT ts / ?, bucketId, metricVersion, SUM(energyNJ)
+            FROM BucketSampleRaw WHERE ts >= ? AND ts < ? AND metricVersion=?
+            GROUP BY ts / ?, bucketId, metricVersion
+            ON CONFLICT(\(timeColumn), bucketId, metricVersion) DO UPDATE SET energyNJ=energyNJ+excluded.energyNJ
+            """
+        try db.execute(sql: bucketSQL, arguments: [divisor, lowerBound, cutoff, EnergyMetric.currentVersion, divisor])
+    }
+
+    private struct LegacySnapshot {
+        let url: URL
+        let immutable: Bool
+        let cleanup: (() -> Void)?
+    }
+
+    private static func prepareLegacySnapshot(at source: URL) throws -> LegacySnapshot {
+        let wal = URL(fileURLWithPath: source.path + "-wal")
+        let walSize = (try? FileManager.default.attributesOfItem(atPath: wal.path)[.size] as? NSNumber)?.intValue ?? 0
+        guard walSize > 0 else { return LegacySnapshot(url: source, immutable: true, cleanup: nil) }
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("voltscope-legacy-snapshot-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        do {
+            for suffix in ["", "-wal", "-shm"] {
+                let original = URL(fileURLWithPath: source.path + suffix)
+                guard FileManager.default.fileExists(atPath: original.path) else { continue }
+                let destination = directory.appendingPathComponent(source.lastPathComponent + suffix)
+                let cloned = original.path.withCString { from in
+                    destination.path.withCString { to in clonefile(from, to, 0) == 0 }
+                }
+                if !cloned { try FileManager.default.copyItem(at: original, to: destination) }
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: directory)
+            throw error
+        }
+        let copied = directory.appendingPathComponent(source.lastPathComponent)
+        return LegacySnapshot(url: copied, immutable: false, cleanup: { try? FileManager.default.removeItem(at: directory) })
     }
 
     private static func accumulate(
@@ -411,9 +534,10 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         }
     }
 
-    private static func copyBatteryAndEvents(source: DatabaseQueue, db: Database) throws {
+    private static func copyBatteryAndEvents(source: DatabaseQueue, db: Database, progress: (@Sendable (Int) -> Void)?) throws {
         try source.read { src in
             let batteries = try Row.fetchCursor(src, sql: "SELECT * FROM BatteryStatus ORDER BY timestamp")
+            var copiedBatteries = 0
             while let row = try batteries.next() {
                 try Task.checkCancellation()
                 let timestamp: Int64 = row["timestamp"]
@@ -434,6 +558,8 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
                     INSERT OR IGNORE INTO BatteryStatus(timestamp, levelPercent, capacityMAh, designMAh, cycleCount, voltageMV, amperageMA, temperatureC, timeRemainingMin, isCharging, isACPlugged)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, arguments: [timestamp, row["levelPercent"] as Double?, row["capacityMAh"] as Int?, row["designMAh"] as Int?, row["cycleCount"] as Int?, row["voltageMV"] as Int?, row["amperageMA"] as Int?, row["temperatureC"] as Double?, row["timeRemainingMin"] as Int?, row["isCharging"] as Bool, row["isACPlugged"] as Bool])
+                copiedBatteries += 1
+                progress?(copiedBatteries)
             }
             let events = try Row.fetchCursor(src, sql: "SELECT * FROM PowerEvents ORDER BY timestamp")
             while let row = try events.next() {
