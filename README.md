@@ -62,9 +62,11 @@ source](#build-from-source) below.
 3. Choose **Open History** from the menu bar panel when you want to inspect
    observations. Leave Voltscope running, or enable Launch at login in
    **Settings**, to keep sampling continuous.
-4. Use **Live**, **1H**, **6H**, **24H**, or **7D** in the History toolbar. The
-   battery chart, App CPU chart, bottom columns, hover details, and CSV export
-   all follow that single range.
+4. Use the single time-range picker in the History toolbar; the available
+   ranges and their bucket widths are defined in the
+   [UI specification](docs/UI_SPEC.md#range-selector). The battery chart,
+   App CPU chart, bottom columns, hover details, and CSV export all follow
+   that one range.
 
 Core monitoring requires no account, helper service, or special permission.
 Launch at login is optional and macOS may ask for approval in Login Items. The

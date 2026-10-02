@@ -3,37 +3,7 @@ import VoltscopeCore
 
 struct HistoryWindow: View {
     @EnvironmentObject private var appState: AppState
-    enum Range: String, CaseIterable, Identifiable {
-        case live = "Live", h1 = "1H", h6 = "6H", h24 = "24H", d7 = "7D"
-        var id: String { rawValue }
-        var minutes: Int {
-            switch self {
-            case .live: return 30
-            case .h1: return 60
-            case .h6: return 360
-            case .h24: return 1440
-            case .d7: return 10080
-            }
-        }
-        var bucketSeconds: Int {
-            switch self {
-            case .live: return 30
-            case .h1: return 120
-            case .h6: return 600
-            case .h24: return 1800
-            case .d7: return 21600
-            }
-        }
-        var bucketLabel: String {
-            switch self {
-            case .live: return "30 seconds"
-            case .h1: return "2 minutes"
-            case .h6: return "10 minutes"
-            case .h24: return "30 minutes"
-            case .d7: return "6 hours · UTC"
-            }
-        }
-    }
+    typealias Range = HistoryRange
     @State private var range: Range = .h24
     @State private var data: HistorySnapshot?
     @State private var cache: [Range: HistorySnapshot] = [:]

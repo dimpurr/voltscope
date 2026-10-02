@@ -195,7 +195,7 @@ Rationale: gives the historical chart a "current state" anchor without re-drawin
 | Property | Value | Why |
 |---|---|---|
 | Mark type | `BarMark` per (bucket, app) | Bars communicate "drain happened in this hour"; an area mark cannot |
-| Bucket size | Range / ~30 buckets — Live: 30 s / 1H: 2 min / 6H: 10 min / 24H: 30 min / 7D: 6 h | Constant visual density across ranges |
+| Bucket size | Range / ~30 buckets — exact widths in the generated range table under [Range selector](#range-selector) | Constant visual density across ranges |
 | Bucket query | `(timestamp / bucketMs) * bucketMs AS bucketStart`, GROUP BY | Pushed into SQL; client receives pre-bucketed points |
 | X-axis domain | Locked to full requested range via `chartXScale(domain:)` | Makes sparse data right-anchor naturally — a 10-min-old install on the 24H view shows one bar at the right edge, not a stretched mega-bar |
 | App color slot | Top-N user apps colored per palette; system-classified rows muted gray when `Group system` is on | Verbose-by-default principle: still rendered, just demoted |
@@ -218,17 +218,31 @@ Per-app row: icon · name · total joules · % of range total · personal sparkl
 
 ### Range selector
 
-Five options: `Live` · `1H` · `6H` · `24H` · `7D`.
+The range names, windows, bucket widths, and labels are defined once in code
+(`HistoryRange` in VoltscopeCore) and the table below is rendered from
+`HistoryRange.allCases`. `HistoryRangeDocsTests.testGeneratedTableMatchesUISpec`
+fails if this table drifts from the code
+([test: HistoryRangeDocsTests.testGeneratedTableMatchesUISpec]).
 
-- **Live** — auto-fits the x-axis to the longer of (last 30 minutes, time since first sample), bucket size 30 s. This is the default for installs younger than 1 hour. It is what the chart "should" look like for new users without resorting to placeholder copy.
-- **1H / 6H / 24H / 7D** — fixed windows, x-axis locked to the full window even when data is sparse. 6H uses ten-minute buckets and hourly labels so it gives a useful near-term detail view without the density of Live.
+<!-- generated:history-ranges:start -->
+| Range | Window | Bucket width | Label |
+| --- | --- | --- | --- |
+| Live | 30 minutes | 30 s | 30 seconds |
+| 1H | 1 hour | 120 s | 2 minutes |
+| 6H | 6 hours | 600 s | 10 minutes |
+| 24H | 24 hours | 1800 s | 30 minutes |
+| 7D | 7 days | 21600 s | 6 hours · UTC |
+<!-- generated:history-ranges:end -->
+
+- **Live** — auto-fits the x-axis to the longer of (the Live window from the table above, time since first sample). This is the default for installs younger than 1 hour. It is what the chart "should" look like for new users without resorting to placeholder copy.
+- **Fixed ranges** — x-axis locked to the full window even when data is sparse; 6H uses hourly labels so it gives a useful near-term detail view without the density of Live.
 - After 1 h of accumulated data, the default range becomes `1H`. After 24 h, `24H`. The user's manual range selection is remembered and overrides the automatic default.
 
 ### Toolbar
 
 | Item | Placement | Notes |
 |---|---|---|
-| Range picker (segmented) | `.principal` | Live / 1H / 6H / 24H / 7D |
+| Range picker (segmented) | `.principal` | Options, windows, and bucket widths are the generated table under [Range selector](#range-selector) |
 | `Display` Menu (`slider.horizontal.3`) | `.principal` (right of picker) | macOS "View Options" idiom — opens a menu with checkmark items. Currently holds `Group system processes`; future toggles (event markers, sparkline visibility, top-N count) extend here without burning toolbar real estate. *Replaces v0.5.1's label-less Toggle.* |
 | `Export as CSV…` | `.primaryAction` | Format named in the button so users know the output type before clicking. The save panel title also reads `Export Energy History as CSV`. |
 
@@ -287,16 +301,16 @@ This section supersedes all earlier History layout, chart, removal and legend ru
 - Compact battery history plot (80 pt), fixed 0–100% scale; a larger app CPU energy plot (200 pt); both share time bounds and plot insets.
 - CPU energy uses real vertical stacks: bar height is recorded energy, colors indicate contributions. Four leading identities for the full window, System and Other apps preserve all recorded contributions. No fabricated whole-battery attribution or 100% normalization.
 - Stable app colors and identity by bundle ID where available; no heuristic merging of unrelated helper names.
-- The existing top `Live / 1H / 6H / 24H / 7D` picker is the only time filter. Both charts, the bottom Energy breakdown / Apps columns, and CSV export use the selected range. Hover reads a bucket; selecting an app or legend item only dims other series and never changes the range.
+- The existing top range picker (see [Range selector](#range-selector)) is the only time filter. Both charts, the bottom Energy breakdown / Apps columns, and CSV export use the selected range. Hover reads a bucket; selecting an app or legend item only dims other series and never changes the range.
 - Battery charging uses a green status band; sleep uses a separate muted band. Missing battery observations break the trace. No emoji event rules through the energy plot.
-- Live / 1H / 6H / 24H / 7D use 30-second / 2-minute / 10-minute / 30-minute / 6-hour UTC-aligned buckets. 6H uses hourly axis labels; 7D deliberately shows four bars per day instead of one oversized daily bar. Edge buckets are partial and identified as such. Energy is shown in J for this CPU-only release.
+- Ranges use UTC-aligned buckets sized per the [generated range table](#range-selector). 6H uses hourly axis labels; 7D deliberately shows four bars per day instead of one oversized daily bar. Edge buckets are partial and identified as such. Energy is shown in J for this CPU-only release.
 - The original v0.6.2 full-width chart plus equal bottom columns are preserved. Hardware measurements remain in the left Energy breakdown column and are independent of App CPU totals.
 - History is a normal Dock-visible document while its window is open. Closing
   the window returns Voltscope to accessory mode; it does not terminate the
   menubar sampler or database process.
 - Keyboard-accessible interval and app selection, accessible labels, compact legends, visible query errors and clear empty states.
 
-The wider per-device apportionment model remains future work. v0.8 ships the Battery interaction model with explicit CPU-only attribution and five time ranges.
+The wider per-device apportionment model remains future work. v0.8 ships the Battery interaction model with explicit CPU-only attribution and the ranges defined by `HistoryRange`.
 
 ## v0.9.0 — Startup, Login Item, and Settings (current)
 
