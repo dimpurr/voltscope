@@ -136,9 +136,8 @@ final class ProcessSamplerTests: XCTestCase {
         // Give the system a moment to accumulate something measurable.
         try await Task.sleep(nanoseconds: 200_000_000)
         let second = sampler.sampleAll()
-        // We expect at least the test process itself to have done some work.
-        // Allow zero on extremely idle hardware but assert it doesn't crash.
-        XCTAssertTrue(second.samples.count >= 0)
+        // Every emitted row must carry positive energy by the sampler contract.
+        XCTAssertTrue(second.samples.allSatisfy { $0.energyNJ > 0 })
     }
 
     private func snapshot(

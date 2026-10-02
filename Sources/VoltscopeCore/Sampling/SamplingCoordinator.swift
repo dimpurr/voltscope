@@ -10,6 +10,12 @@ public actor SamplingCoordinator {
     private let batterySampler: BatterySampler
     private let bucketSampler: BucketSampler
 
+    /// Most recent process sampling coverage; persistence is owned by a later task.
+    public private(set) var latestProcessCoverage: ProcessCoverage?
+
+    /// Whether this platform exposes per-process DPE energy counters.
+    public var processEnergyAvailable: Bool { processSampler.energyAvailable }
+
     private var processTask: Task<Void, Never>?
     private var batteryTask: Task<Void, Never>?
     private var bucketTask: Task<Void, Never>?
@@ -95,6 +101,10 @@ public actor SamplingCoordinator {
     @discardableResult
     private func runProcessTick(emit: Bool) async -> Int {
         let result = processSampler.sampleAll()
+        latestProcessCoverage = ProcessCoverage(
+            visibleCount: result.visibleCount,
+            unreadableCount: result.unreadableCount
+        )
         guard emit, !result.samples.isEmpty else { return 0 }
         do {
             try await database.writeBatchSamples(result.samples)
@@ -149,5 +159,15 @@ public actor SamplingCoordinator {
 
     private nonisolated func logError(_ message: String) {
         FileHandle.standardError.write(Data("[Voltscope] \(message)\n".utf8))
+    }
+}
+
+public struct ProcessCoverage: Equatable, Sendable {
+    public let visibleCount: Int
+    public let unreadableCount: Int
+
+    public init(visibleCount: Int, unreadableCount: Int) {
+        self.visibleCount = visibleCount
+        self.unreadableCount = unreadableCount
     }
 }

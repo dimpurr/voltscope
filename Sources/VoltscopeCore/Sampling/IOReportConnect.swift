@@ -69,13 +69,9 @@ public final class IOReportConnectSampler: @unchecked Sendable {
             // the cumulative integer at values[0] (byte offset 32 → uint64
             // index 4 within the 8-uint64 element).
             var deltas: [String: Int64] = [:]   // bucketName → energyNJ delta
+            let selectedNames = BucketSampler.selectedChannelNames(channels.map(\.channelName))
             for (i, desc) in channels.enumerated() {
-                // Skip sub-channels: the IOReport Energy Model exposes a four-level
-                // hierarchy for CPU (CPU Energy > cluster > core > DTL leaf) and
-                // duplicate rails for GPU (GPU0 mJ + GPU Energy nJ). Accumulating
-                // all levels would inflate each bucket by ~3.6× (W1 §4.5).
-                // We count only top-level summary channels and skip their children.
-                guard !BucketSampler.isSummarySubChannel(desc.channelName) else { continue }
+                guard selectedNames.contains(desc.channelName) else { continue }
 
                 let elBase = basePtr.advanced(by: i * 8)
                 let rawValue = Int64(bitPattern: elBase[4])
@@ -205,12 +201,10 @@ public final class IOReportConnectSampler: @unchecked Sendable {
                       group == "Energy Model" else { continue }
                 guard let channelArr = legendEntry["IOReportChannels"] as? [[Any]] else { continue }
 
-                // Decode unit from per-legend channel info (default to nJ if missing)
-                var nJPerUnit: Double = 1.0
-                if let info = legendEntry["IOReportChannelInfo"] as? [String: Any],
-                   let unit = (info["IOReportChannelUnit"] as? NSNumber)?.uint64Value {
-                    nJPerUnit = Self.unitToNJMultiplier(unit)
-                }
+                // Require a declared energy unit so unrelated counters are never stored as nJ.
+                guard let info = legendEntry["IOReportChannelInfo"] as? [String: Any],
+                      let unit = (info["IOReportChannelUnit"] as? NSNumber)?.uint64Value,
+                      let nJPerUnit = Self.unitToNJMultiplier(unit) else { continue }
 
                 for ch in channelArr {
                     guard ch.count >= 3,
@@ -234,11 +228,9 @@ public final class IOReportConnectSampler: @unchecked Sendable {
     /// in the SI scale slot at bits 32-39) into a multiplier that converts a
     /// raw value in that unit into nanojoules. Only meaningful when the unit's
     /// quantity is Energy (kIOReportQuantityEnergy = 3).
-    static func unitToNJMultiplier(_ unit: UInt64) -> Double {
+    static func unitToNJMultiplier(_ unit: UInt64) -> Double? {
         let quantity = (unit >> 56) & 0xFF
-        // Energy quantity = 3; if it's something else we still default to nJ
-        // to avoid silently returning 0.
-        guard quantity == 3 else { return 1.0 }
+        guard quantity == 3 else { return nil }
         let scaleByte = Int((unit >> 32) & 0xFF)
         // kIOReportExpZeroOffset = 127; exp = scaleByte - 127
         // Special case: scaleByte == 0 means kIOReportScaleUnity (exp = 0)

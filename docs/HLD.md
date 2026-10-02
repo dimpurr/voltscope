@@ -103,7 +103,7 @@ The core per-process per-sample table. Each sample writes one row per running pr
 | `parentPid` | INTEGER | For grouping helper processes under their parent app |
 | `cpuUserNs` | INTEGER | `ri_user_time` in nanoseconds |
 | `cpuSystemNs` | INTEGER | `ri_system_time` in nanoseconds |
-| `energyNJ` | INTEGER | `ri_billed_energy` (nanojoules) — **the headline metric** |
+| `energyNJ` | INTEGER | `ri_energy_nj` delta (nanojoules), hardware-estimated CPU energy |
 | `wakeups` | INTEGER | `ri_pkg_idle_wkups + ri_interrupt_wkups` |
 | `diskReadBytes` | INTEGER | `ri_diskio_bytesread` |
 | `diskWriteBytes` | INTEGER | `ri_diskio_byteswritten` |
@@ -183,9 +183,9 @@ Populated only when helper is installed. Contains powermetrics-derived joule rat
 
 1. Timer fires.
 2. Call `proc_listallpids` → array of active PIDs.
-3. For each PID: call `proc_pid_rusage(pid, RUSAGE_INFO_V6, &rusage)`. Skip on error (process may have exited).
+3. For each PID: call `proc_pid_rusage(pid, RUSAGE_INFO_V6, &rusage)`. Count `EPERM` as unreadable coverage; other errors such as `ESRCH` are transient exits and are not counted.
 4. Resolve bundle identifier: `NSRunningApplication(processIdentifier:)?.bundleIdentifier` if present, else `proc_pidpath` + parsing.
-5. Compute deltas vs previous sample: `energyDelta = current.ri_billed_energy - previous.ri_billed_energy`. First sample after process start is skipped (no baseline).
+5. Convert `ri_user_time` and `ri_system_time` from mach timebase ticks to nanoseconds and compute `ri_energy_nj` deltas. First sample after process start is skipped (no baseline); zero-energy deltas emit no row.
 6. Open GRDB write transaction; insert N rows with shared `timestamp`.
 7. Check retention threshold; trigger background compaction job if needed.
 

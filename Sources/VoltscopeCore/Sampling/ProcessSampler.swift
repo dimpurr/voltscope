@@ -11,8 +11,7 @@ public struct ProcessSampleResult: Sendable {
     public let samples: [EnergySample]
     /// Number of processes successfully read via proc_pid_rusage this tick.
     public let visibleCount: Int
-    /// Number of processes skipped because proc_pid_rusage returned an error
-    /// (EPERM for root/system-account processes, or other transient errors).
+    /// Number of processes skipped because proc_pid_rusage returned EPERM.
     public let unreadableCount: Int
 }
 
@@ -78,7 +77,7 @@ public final class ProcessSampler: @unchecked Sendable {
     ///
     /// - Delta rows represent the change since the previous sample (zero on first sight).
     /// - `visibleCount` counts processes successfully read by proc_pid_rusage.
-    /// - `unreadableCount` counts processes where proc_pid_rusage failed (EPERM, etc).
+    /// - `unreadableCount` counts processes where proc_pid_rusage failed with EPERM.
     public func sampleAll(at date: Date = Date()) -> ProcessSampleResult {
         queue.sync {
             let (snapshots, unreadableCount) = readAllProcesses()
@@ -128,8 +127,8 @@ public final class ProcessSampler: @unchecked Sendable {
 
     /// Pure delta rule for one process between two consecutive snapshots.
     ///
-    /// Returns `nil` when the interval billed no new CPU energy to the process.
-    /// `ri_billed_energy` is coarse-grained and only credited in whole units, so
+    /// Returns `nil` when the interval reports no new CPU energy for the process.
+    /// `ri_energy_nj` is cumulative hardware-estimated energy, so
     /// most of the 300–500 processes in the roster report an unchanged
     /// cumulative counter on any given tick. Emitting those rows produced the
     /// overwhelming majority of historical storage growth while contributing
@@ -192,16 +191,17 @@ public final class ProcessSampler: @unchecked Sendable {
         let pids = listAllPids()
         var results: [ProcessSnapshot] = []
         results.reserveCapacity(pids.count)
-        var unreadable = 0
+        var errors: [Int32] = []
 
         for pid in pids where pid > 0 {
-            if let snap = readSnapshot(for: pid) {
+            var errorNumber: Int32 = 0
+            if let snap = readSnapshot(for: pid, errorNumber: &errorNumber) {
                 results.append(snap)
             } else {
-                unreadable += 1
+                errors.append(errorNumber)
             }
         }
-        return (results, unreadable)
+        return (results, Self.unreadableCount(forErrors: errors))
     }
 
     private func listAllPids() -> [Int32] {
@@ -215,14 +215,29 @@ public final class ProcessSampler: @unchecked Sendable {
             return proc_listallpids(ptr.baseAddress, bufSize)
         }
         guard bytesWritten > 0 else { return [] }
-        let count = Int(bytesWritten) / MemoryLayout<pid_t>.stride
+        let count = Self.pidCount(fromProcListAllPids: bytesWritten)
         return Array(buffer.prefix(count))
     }
 
-    private func readSnapshot(for pid: pid_t) -> ProcessSnapshot? {
+    static func pidCount(fromProcListAllPids returnValue: Int32) -> Int {
+        max(0, Int(returnValue))
+    }
+
+    static func isUnreadableError(_ errorNumber: Int32) -> Bool {
+        errorNumber == EPERM
+    }
+
+    static func unreadableCount(forErrors errors: [Int32]) -> Int {
+        errors.filter(isUnreadableError).count
+    }
+
+    private func readSnapshot(for pid: pid_t, errorNumber: inout Int32) -> ProcessSnapshot? {
         var info = rusage_info_v6()
         let result = voltscope_proc_pid_rusage_v6(pid, &info)
-        guard result == 0 else { return nil }
+        guard result == 0 else {
+            errorNumber = errno
+            return nil
+        }
 
         let identity = resolveIdentity(pid: pid)
         let ppidRaw = voltscope_get_parent_pid(pid)
@@ -232,8 +247,8 @@ public final class ProcessSampler: @unchecked Sendable {
         // Multiply by timebaseNumer/timebaseDenom to convert to nanoseconds.
         // Apple Silicon: 125/3 (~41.7ns per tick). Intel: 1/1 (already ns).
         // Source: W1 selftest2 output (getrusage 2.990s vs ri_user_time 0.072s = 41.7×).
-        let cpuUserNs = mulTimebase(info.ri_user_time)
-        let cpuSystemNs = mulTimebase(info.ri_system_time)
+        let cpuUserNs = Self.timebaseNanoseconds(info.ri_user_time, numer: timebaseNumer, denom: timebaseDenom)
+        let cpuSystemNs = Self.timebaseNanoseconds(info.ri_system_time, numer: timebaseNumer, denom: timebaseDenom)
 
         return ProcessSnapshot(
             pid: pid,
@@ -243,7 +258,7 @@ public final class ProcessSampler: @unchecked Sendable {
             path: identity.path,
             cpuUserNs: cpuUserNs,
             cpuSystemNs: cpuSystemNs,
-            energyTotal: info.ri_energy_nj,
+            energyTotal: Self.energyTotal(from: info),
             wakeupsTotal: info.ri_pkg_idle_wkups &+ info.ri_interrupt_wkups,
             diskReadTotal: info.ri_diskio_bytesread,
             diskWriteTotal: info.ri_diskio_byteswritten,
@@ -251,17 +266,20 @@ public final class ProcessSampler: @unchecked Sendable {
         )
     }
 
+    static func energyTotal(from info: rusage_info_v6) -> UInt64 {
+        info.ri_energy_nj
+    }
+
     /// Converts a mach absolute time value to nanoseconds using the cached timebase.
-    /// Uses 128-bit arithmetic to avoid overflow on large tick values.
-    private func mulTimebase(_ ticks: UInt64) -> UInt64 {
+    static func timebaseNanoseconds(_ ticks: UInt64, numer: UInt32, denom: UInt32) -> UInt64 {
         // Avoid overflow: ticks * numer may exceed UInt64 on long-running processes.
         // Use UInt128-equivalent via two-step 64-bit arithmetic with saturation.
-        if timebaseNumer == timebaseDenom { return ticks }  // fast path (Intel: 1/1)
+        if numer == denom { return ticks }
         // Safe wide multiplication: split into high/low 32-bit halves.
-        let hi = UInt64(ticks >> 32) * UInt64(timebaseNumer)
-        let lo = UInt64(ticks & 0xFFFF_FFFF) * UInt64(timebaseNumer)
+        let hi = UInt64(ticks >> 32) * UInt64(numer)
+        let lo = UInt64(ticks & 0xFFFF_FFFF) * UInt64(numer)
         let combined = (hi << 32) &+ lo
-        return combined / UInt64(timebaseDenom)
+        return combined / UInt64(denom)
     }
 
     private struct Identity {
