@@ -70,6 +70,13 @@ public final class IOReportConnectSampler: @unchecked Sendable {
             // index 4 within the 8-uint64 element).
             var deltas: [String: Int64] = [:]   // bucketName → energyNJ delta
             for (i, desc) in channels.enumerated() {
+                // Skip sub-channels: the IOReport Energy Model exposes a four-level
+                // hierarchy for CPU (CPU Energy > cluster > core > DTL leaf) and
+                // duplicate rails for GPU (GPU0 mJ + GPU Energy nJ). Accumulating
+                // all levels would inflate each bucket by ~3.6× (W1 §4.5).
+                // We count only top-level summary channels and skip their children.
+                guard !BucketSampler.isSummarySubChannel(desc.channelName) else { continue }
+
                 let elBase = basePtr.advanced(by: i * 8)
                 let rawValue = Int64(bitPattern: elBase[4])
                 let key = desc.providerId ^ desc.channelId

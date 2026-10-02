@@ -127,7 +127,7 @@ final class ProcessSamplerTests: XCTestCase {
         let sampler = ProcessSampler()
         let first = sampler.sampleAll()
         // First call always returns empty (baseline pass).
-        XCTAssertTrue(first.isEmpty, "first sample should be baseline-only")
+        XCTAssertTrue(first.samples.isEmpty, "first sample should be baseline-only")
     }
 
     func testSecondTickEmitsRows() async throws {
@@ -138,7 +138,7 @@ final class ProcessSamplerTests: XCTestCase {
         let second = sampler.sampleAll()
         // We expect at least the test process itself to have done some work.
         // Allow zero on extremely idle hardware but assert it doesn't crash.
-        XCTAssertTrue(second.count >= 0)
+        XCTAssertTrue(second.samples.count >= 0)
     }
 
     private func snapshot(

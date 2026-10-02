@@ -5,6 +5,17 @@ import VoltscopeC
 import AppKit
 #endif
 
+/// Result of one ProcessSampler tick: the delta rows plus coverage counts.
+public struct ProcessSampleResult: Sendable {
+    /// One EnergySample delta row per process that had measurable activity.
+    public let samples: [EnergySample]
+    /// Number of processes successfully read via proc_pid_rusage this tick.
+    public let visibleCount: Int
+    /// Number of processes skipped because proc_pid_rusage returned an error
+    /// (EPERM for root/system-account processes, or other transient errors).
+    public let unreadableCount: Int
+}
+
 public struct ProcessSnapshot: Sendable, Equatable {
     public let pid: Int32
     public let parentPid: Int32?
@@ -13,8 +24,11 @@ public struct ProcessSnapshot: Sendable, Equatable {
     public let path: String?
     public let cpuUserNs: UInt64
     public let cpuSystemNs: UInt64
-    public let energyTotal: UInt64       // ri_billed_energy (cumulative since process start)
-    public let wakeupsTotal: UInt64      // pkg_idle + interrupt
+    /// Cumulative DPE-estimated energy in nanojoules for this task, from
+    /// ri_energy_nj (recount/context-switch accounting). On Intel this field
+    /// is always 0 because there is no per-CPU DPE counter (see energyAvailable).
+    public let energyTotal: UInt64
+    public let wakeupsTotal: UInt64
     public let diskReadTotal: UInt64
     public let diskWriteTotal: UInt64
     public let procStartAbstime: UInt64  // serves as a process-identity hash to detect PID reuse
@@ -32,13 +46,42 @@ public final class ProcessSampler: @unchecked Sendable {
     private var previous: [ProcessKey: ProcessSnapshot] = [:]
     private let queue = DispatchQueue(label: "com.dimpurr.voltscope.processsampler")
 
-    public init() {}
+    /// Cached mach_timebase_info read once at init. Used to convert
+    /// ri_user_time / ri_system_time (mach absolute time units) to nanoseconds.
+    /// Formula: ns = ticks × numer / denom.
+    /// On Apple Silicon: numer=125, denom=3 (verified: selftest2 in W1 probe).
+    /// On Intel: numer=1, denom=1 (mach absolute time equals ns).
+    private let timebaseNumer: UInt32
+    private let timebaseDenom: UInt32
 
-    /// Samples all visible processes once and returns one EnergySample row per process,
-    /// with values representing the *delta* since the previous sample (or zero on first sight).
-    public func sampleAll(at date: Date = Date()) -> [EnergySample] {
+    /// True on Apple Silicon (or any SoC with CONFIG_PERVASIVE_ENERGY +
+    /// HAS_CPU_DPE_COUNTER); false on Intel where ri_energy_nj is always 0.
+    /// Determined once at init by reading kern.pervasive_energy sysctl.
+    public let energyAvailable: Bool
+
+    public init() {
+        var tb = mach_timebase_info(numer: 1, denom: 1)
+        mach_timebase_info(&tb)
+        self.timebaseNumer = tb.numer
+        self.timebaseDenom = tb.denom
+
+        // kern.pervasive_energy == 1 on Apple Silicon with DPE counters;
+        // 0 on Intel and VMs. Source: XNU bsd/kern/kern_sysctl.c:5158.
+        var value: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        sysctlbyname("kern.pervasive_energy", &value, &size, nil, 0)
+        self.energyAvailable = (value == 1)
+    }
+
+    /// Samples all visible processes once and returns a `ProcessSampleResult`
+    /// containing delta rows plus coverage counts for this tick.
+    ///
+    /// - Delta rows represent the change since the previous sample (zero on first sight).
+    /// - `visibleCount` counts processes successfully read by proc_pid_rusage.
+    /// - `unreadableCount` counts processes where proc_pid_rusage failed (EPERM, etc).
+    public func sampleAll(at date: Date = Date()) -> ProcessSampleResult {
         queue.sync {
-            let snapshots = readAllProcesses()
+            let (snapshots, unreadableCount) = readAllProcesses()
             let timestamp = Int64(date.timeIntervalSince1970 * 1000)
             let calendar = Calendar(identifier: .gregorian)
             let comps = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
@@ -75,7 +118,11 @@ public final class ProcessSampler: @unchecked Sendable {
             }
 
             previous = nextPrevious
-            return output
+            return ProcessSampleResult(
+                samples: output,
+                visibleCount: snapshots.count,
+                unreadableCount: unreadableCount
+            )
         }
     }
 
@@ -140,16 +187,21 @@ public final class ProcessSampler: @unchecked Sendable {
 
     // MARK: - Internal: enumerate PIDs and read rusage
 
-    private func readAllProcesses() -> [ProcessSnapshot] {
+    /// Returns all successfully-read snapshots plus a count of unreadable processes.
+    private func readAllProcesses() -> (snapshots: [ProcessSnapshot], unreadableCount: Int) {
         let pids = listAllPids()
         var results: [ProcessSnapshot] = []
         results.reserveCapacity(pids.count)
+        var unreadable = 0
 
         for pid in pids where pid > 0 {
-            guard let snap = readSnapshot(for: pid) else { continue }
-            results.append(snap)
+            if let snap = readSnapshot(for: pid) {
+                results.append(snap)
+            } else {
+                unreadable += 1
+            }
         }
-        return results
+        return (results, unreadable)
     }
 
     private func listAllPids() -> [Int32] {
@@ -176,20 +228,40 @@ public final class ProcessSampler: @unchecked Sendable {
         let ppidRaw = voltscope_get_parent_pid(pid)
         let parentPid: Int32? = ppidRaw > 0 ? Int32(ppidRaw) : nil
 
+        // ri_user_time and ri_system_time are in mach absolute time units.
+        // Multiply by timebaseNumer/timebaseDenom to convert to nanoseconds.
+        // Apple Silicon: 125/3 (~41.7ns per tick). Intel: 1/1 (already ns).
+        // Source: W1 selftest2 output (getrusage 2.990s vs ri_user_time 0.072s = 41.7×).
+        let cpuUserNs = mulTimebase(info.ri_user_time)
+        let cpuSystemNs = mulTimebase(info.ri_system_time)
+
         return ProcessSnapshot(
             pid: pid,
             parentPid: parentPid,
             bundleIdentifier: identity.bundleId,
             processName: identity.name,
             path: identity.path,
-            cpuUserNs: info.ri_user_time,
-            cpuSystemNs: info.ri_system_time,
-            energyTotal: info.ri_billed_energy,
+            cpuUserNs: cpuUserNs,
+            cpuSystemNs: cpuSystemNs,
+            energyTotal: info.ri_energy_nj,
             wakeupsTotal: info.ri_pkg_idle_wkups &+ info.ri_interrupt_wkups,
             diskReadTotal: info.ri_diskio_bytesread,
             diskWriteTotal: info.ri_diskio_byteswritten,
             procStartAbstime: info.ri_proc_start_abstime
         )
+    }
+
+    /// Converts a mach absolute time value to nanoseconds using the cached timebase.
+    /// Uses 128-bit arithmetic to avoid overflow on large tick values.
+    private func mulTimebase(_ ticks: UInt64) -> UInt64 {
+        // Avoid overflow: ticks * numer may exceed UInt64 on long-running processes.
+        // Use UInt128-equivalent via two-step 64-bit arithmetic with saturation.
+        if timebaseNumer == timebaseDenom { return ticks }  // fast path (Intel: 1/1)
+        // Safe wide multiplication: split into high/low 32-bit halves.
+        let hi = UInt64(ticks >> 32) * UInt64(timebaseNumer)
+        let lo = UInt64(ticks & 0xFFFF_FFFF) * UInt64(timebaseNumer)
+        let combined = (hi << 32) &+ lo
+        return combined / UInt64(timebaseDenom)
     }
 
     private struct Identity {

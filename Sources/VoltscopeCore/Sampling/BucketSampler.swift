@@ -11,146 +11,115 @@ import CoreFoundation
 /// false and `sample()` returns []. The UI surfaces this gracefully.
 public final class BucketSampler: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.dimpurr.voltscope.bucketsampler")
-    // Framework path (works on macOS 13–15)
-    private var subscription: CFTypeRef?
-    private var subbedChannels: CFMutableDictionary?
-    private var previousSample: CFDictionary?
-    private var setupAttempted = false
-    private var setupSucceeded = false
-    // IOConnect path (works on macOS 26+ where the framework is gone, and
-    // also on 13–15 as a backup; preferred when framework is unavailable)
+    // IOConnect path (works on all Apple Silicon macOS versions including 26+,
+    // and also on macOS 13–15 where IOReport.framework may or may not exist).
+    // The framework path was removed because IOReport.framework is absent from
+    // the dyld cache on macOS 15.7.1 and was officially removed in macOS 26.
+    // IOConnect is the only path verified to work end-to-end on this hardware.
+    // See: W1-ENERGY-REPORT.md §4.1 (dltest output confirming framework absence).
     private let connectSampler = IOReportConnectSampler()
 
     public init() {}
 
-    public var available: Bool { setupSucceeded || connectSampler.available }
+    public var available: Bool { connectSampler.available }
 
     /// Group of channels exposed by the system Energy Model on Apple Silicon.
     private static let energyModelGroup: String = "Energy Model"
 
     /// Returns the per-bucket energy delta rows for the interval since the
     /// previous call (or [] for the first call, which only baselines).
-    /// Tries the IOReport.framework path first (macOS 13–15) and falls back
-    /// to the IOConnect path (works on every Apple Silicon macOS including 26+).
     public func sample(at date: Date = Date()) -> [SystemBucket] {
-        if let frameworkRows = sampleViaFramework(at: date), !frameworkRows.isEmpty {
-            return frameworkRows
-        }
-        return connectSampler.sample(at: date)
+        connectSampler.sample(at: date)
     }
 
-    /// Framework-based sampler. Returns nil when IOReport.framework hasn't
-    /// resolved (e.g. macOS 26+) so the caller knows to try the IOConnect
-    /// path; returns [] when the framework loaded but produced no rows
-    /// this tick.
-    private func sampleViaFramework(at date: Date) -> [SystemBucket]? {
-        queue.sync {
-            ensureSetup()
-            guard setupSucceeded,
-                  let subscription = subscription,
-                  let subbed = subbedChannels,
-                  let createSamples = IOReport_CreateSamples,
-                  let createDelta = IOReport_CreateSamplesDelta,
-                  let getValue = IOReport_SimpleGetIntegerValue,
-                  let getName = IOReport_ChannelGetChannelName,
-                  let getGroup = IOReport_ChannelGetGroup,
-                  let iterate = IOReport_Iterate
-            else { return nil }
+    // MARK: - Channel classification
 
-            guard let currUnmanaged = createSamples(subscription, subbed, nil) else {
-                return []
-            }
-            let curr = currUnmanaged.takeRetainedValue()
+    /// The set of "top-level summary" channel names recognised on Apple Silicon
+    /// (M1 Max observed, legend_out.txt CH 21 / CH 161).
+    ///
+    /// On Apple Silicon the Energy Model exposes a four-level hierarchy for CPU:
+    ///   1. `CPU Energy`         — top-level sum for all CPU clusters (mJ)
+    ///   2. `EACC_CPU`, `PACC0_CPU`, `PACC1_CPU` — per-cluster totals (mJ)
+    ///   3. `EACC_CPU0`, `PACC0_CPU0`… — per-core totals (mJ)
+    ///   4. `ECPUDTLxx`, `PCPUDTLxx`, `PCPU1DTLxx` — DTL leaf channels (mJ)
+    ///
+    /// GPU has two channels that represent the same physical rail:
+    ///   `GPU0` (mJ) and `GPU Energy` (nJ) — both map to the GPU rail.
+    ///
+    /// The previous `normalizeBucketName` used `contains("cpu")` which matched
+    /// all four layers and ~3.6× over-counted (W1-ENERGY-REPORT.md §4.5).
+    ///
+    /// This set lists names that ARE top-level summaries and should be kept.
+    /// Channels not in any summary group are mapped individually (PCIe, etc).
+    ///
+    /// **Implementation contract**: a channel is a sub-channel and should be
+    /// skipped if `isSummarySubChannel(rawName:)` returns true.
+    nonisolated(unsafe) static let summaryChannels: Set<String> = [
+        "CPU Energy",
+        "GPU Energy",
+        "ANE0",
+        "DRAM0",
+        "AVE0",
+        "ISP0",
+        "MSR0",
+        "DCS0",
+        "AMCC0",
+    ]
 
-            defer { previousSample = curr }
-            guard let prev = previousSample else {
-                // First sample is only a baseline; cannot compute a delta yet.
-                return []
-            }
+    /// Returns true if `rawName` is a sub-channel that is already accounted for
+    /// by a top-level summary channel in `summaryChannels`, and therefore should
+    /// be skipped to avoid double-counting.
+    ///
+    /// Sub-channel patterns (from legend_out.txt, M1 Max):
+    /// - CPU second layer: `EACC_CPU`, `PACC0_CPU`, `PACC1_CPU`
+    /// - CPU third layer: `EACC_CPU0`, `EACC_CPU1`, `PACC0_CPU0`…, `EACC_CPM`, `PACC0_CPM`…
+    /// - CPU DTL leaves: `ECPUDTLxx`, `PCPUDTLxx`, `PCPU1DTLxx`
+    /// - GPU sub-channel: `GPU0`, `GPU SRAM0` (covered by `GPU Energy`)
+    /// - DRAM sub-channels: none observed beyond `DRAM0` on M1 Max
+    static func isSummarySubChannel(_ rawName: String) -> Bool {
+        // Already a top-level summary — keep it, do not skip.
+        if summaryChannels.contains(rawName) { return false }
 
-            guard let deltaUnmanaged = createDelta(prev, curr, nil) else {
-                return []
-            }
-            let delta = deltaUnmanaged.takeRetainedValue()
+        let lower = rawName.lowercased()
 
-            let timestamp = Int64(date.timeIntervalSince1970 * 1000)
-            var rows: [SystemBucket] = []
+        // CPU sub-channels: EACC_CPU*, PACC0_CPU*, PACC1_CPU*, ECPUDTL*, PCPUDTL*, PCPU1DTL*
+        if lower.hasPrefix("eacc_cpu") || lower.hasPrefix("pacc0_cpu") || lower.hasPrefix("pacc1_cpu") { return true }
+        if lower.hasPrefix("ecpudtl") || lower.hasPrefix("pcpudtl") || lower.hasPrefix("pcpu1dtl") { return true }
 
-            // The IOReportIterate block is invoked for every channel sample.
-            // Returning 0 means "continue" per IOReport convention.
-            _ = iterate(delta) { channelSample in
-                let nameOpt = getName(channelSample)?.takeUnretainedValue()
-                let groupOpt = getGroup(channelSample)?.takeUnretainedValue()
-                guard let rawName = nameOpt as String?,
-                      let rawGroup = groupOpt as String?,
-                      rawGroup == "Energy Model" else { return 0 }
+        // GPU sub-channels: GPU0, GPU SRAM0 — covered by GPU Energy
+        if rawName == "GPU0" || rawName == "GPU SRAM0" { return true }
 
-                let value = getValue(channelSample, 0)
-                guard value > 0 else { return 0 }
-
-                rows.append(SystemBucket(
-                    timestamp: timestamp,
-                    bucketName: BucketSampler.normalizeBucketName(rawName),
-                    energyNJ: value
-                ))
-                return 0
-            }
-
-            return rows
-        }
+        return false
     }
 
-    private func ensureSetup() {
-        guard !setupAttempted else { return }
-        setupAttempted = true
-
-        guard ioReportAvailable,
-              let copyChannels = IOReport_CopyChannelsInGroup,
-              let createSub = IOReport_CreateSubscription
-        else { return }
-
-        guard let channelsUnmanaged = copyChannels(
-            BucketSampler.energyModelGroup as CFString, nil, 0, 0, 0
-        ) else { return }
-        let channels = channelsUnmanaged.takeRetainedValue()
-
-        var subbedRef: Unmanaged<CFMutableDictionary>?
-        guard let subUnmanaged = createSub(nil, channels, &subbedRef, 0, nil) else {
-            return
-        }
-        let sub = subUnmanaged.takeRetainedValue()
-        guard let subbed = subbedRef?.takeRetainedValue() else { return }
-
-        self.subscription = sub
-        self.subbedChannels = subbed
-        self.setupSucceeded = true
-    }
-
-    /// Collapse multiple raw channel names that conceptually belong to the
-    /// same hardware area into a single user-facing bucket. On Apple Silicon
-    /// the CPU energy is split across performance + efficiency clusters and
-    /// across many sub-subsystems (DCS, AMCC, SOC_REST, ECPM, etc); we map
-    /// these into the bucket categories a user actually thinks in.
+    /// Maps a raw channel name to a user-facing bucket name.
+    ///
+    /// Only called for channels that have already passed `isSummarySubChannel`
+    /// (i.e. sub-channels have been filtered out upstream). This function does
+    /// not need to defend against the nested-channel inflation problem.
     static func normalizeBucketName(_ raw: String) -> String {
         let lower = raw.lowercased()
-        // Compute / accelerators
-        if lower.hasPrefix("ecpu") || lower.hasPrefix("pcpu") || lower.contains("cpu") { return "CPU" }
-        if lower.contains("gpu") { return "GPU" }
+        // Top-level CPU summary
+        if raw == "CPU Energy" || lower.hasPrefix("ecpu") || lower.hasPrefix("pcpu") { return "CPU" }
+        // GPU
+        if raw == "GPU Energy" || lower.contains("gpu") { return "GPU" }
+        // ANE (Apple Neural Engine)
         if lower.contains("ane") { return "ANE" }
-        if lower.contains("ave") { return "Video" }   // Apple Video Encoder
-        if lower.contains("isp") { return "Camera" }  // Image Signal Processor
-        // Memory / fabric
+        // Video encoder
+        if lower.contains("ave") { return "Video" }
+        // Image Signal Processor
+        if lower.contains("isp") { return "Camera" }
+        // Memory
         if lower.contains("dram") { return "DRAM" }
-        if lower.contains("amcc") { return "Fabric" }  // Apple Memory Cache Controller
-        if lower.contains("dcs") { return "Fabric" }   // Display Compression / fabric DCS
-        if lower.contains("msr") { return "Fabric" }   // Memory subsystem
+        if lower.contains("amcc") { return "Fabric" }
+        if lower.contains("dcs") { return "Fabric" }
+        if lower.contains("msr") { return "Fabric" }
         // Display / IO
         if lower.contains("disp") { return "Display" }
         if lower.contains("pcie") { return "PCIe" }
         if lower.contains("apciec") { return "PCIe" }
-        // Power management overhead (counted separately so user sees the cost)
+        // Power management overhead
         if lower.contains("ecpm") || lower.contains("pcpm") { return "Power Mgmt" }
-        // Anything else under SOC_REST / SOC_AON / unrecognised → "SoC Other"
         return "SoC Other"
     }
 }

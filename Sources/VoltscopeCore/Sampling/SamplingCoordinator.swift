@@ -94,14 +94,14 @@ public actor SamplingCoordinator {
 
     @discardableResult
     private func runProcessTick(emit: Bool) async -> Int {
-        let samples = processSampler.sampleAll()
-        guard emit, !samples.isEmpty else { return 0 }
+        let result = processSampler.sampleAll()
+        guard emit, !result.samples.isEmpty else { return 0 }
         do {
-            try await database.writeBatchSamples(samples)
+            try await database.writeBatchSamples(result.samples)
         } catch {
             logError("EnergySample batch insert failed: \(error)")
         }
-        return samples.count
+        return result.samples.count
     }
 
     private func runBatteryTick() async {
