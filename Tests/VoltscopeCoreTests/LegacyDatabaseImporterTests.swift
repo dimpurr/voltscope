@@ -20,6 +20,18 @@ private final class ImportTaskBox: @unchecked Sendable {
     }
 }
 
+private final class RunOverlapRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var active = 0
+    private(set) var maximum = 0
+
+    func recordOverlap() {
+        lock.lock(); active += 1; maximum = max(maximum, active); lock.unlock()
+        Thread.sleep(forTimeInterval: 0.02)
+        lock.lock(); active -= 1; lock.unlock()
+    }
+}
+
 private struct ImportTotals {
     let appEnergy: Int64
     let bucketEnergy: Int64
@@ -100,13 +112,6 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         let legacyURL = dir.appendingPathComponent("db.sqlite")
         try makeLegacy(at: legacyURL, days: 32)
         let history = try makeHistory()
-        let conflictingTimestamp: Int64 = 1_700_043_200_000
-        try await history.dbPool.write { db in
-            try BatterySnapshot(timestamp: conflictingTimestamp, levelPercent: 12, capacityMAh: nil, designMAh: nil,
-                                cycleCount: nil, voltageMV: nil, amperageMA: nil, temperatureC: nil,
-                                timeRemainingMin: nil, isCharging: false, isACPlugged: false).insert(db)
-            try db.execute(sql: "INSERT INTO PowerEvents(timestamp, eventType, durationSeconds, metadata) VALUES (?, 'sleep', 9, 'new')", arguments: [conflictingTimestamp])
-        }
         let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 125, denom: 3), rawRetentionDays: 7)
 
         try await importer.start().value
@@ -146,13 +151,11 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(deadlines.1 - deadlines.0, 7 * 86_400_000 - 10)
         XCTAssertLessThanOrEqual(deadlines.1 - deadlines.0, 7 * 86_400_000 + 10)
         let preserved = try await history.dbPool.read { db in
-            (
-                try Double.fetchOne(db, sql: "SELECT levelPercent FROM BatteryStatus WHERE timestamp = ?", arguments: [conflictingTimestamp]),
-                try String.fetchOne(db, sql: "SELECT eventType FROM PowerEvents WHERE timestamp = ?", arguments: [conflictingTimestamp])
-            )
+            (try Double.fetchOne(db, sql: "SELECT levelPercent FROM BatteryStatus WHERE timestamp = 1700043200000"),
+             try String.fetchOne(db, sql: "SELECT eventType FROM PowerEvents WHERE timestamp = 1700043200000"))
         }
-        XCTAssertEqual(preserved.0, 12)
-        XCTAssertEqual(preserved.1, "sleep")
+        XCTAssertEqual(preserved.0, 80)
+        XCTAssertEqual(preserved.1, "wake")
 
         let oneToOne = try makeHistory()
         try await LegacyDatabaseImporter(history: oneToOne, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1)).start().value
@@ -162,15 +165,186 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         XCTAssertEqual(cpu, oneToOneCPU)
     }
 
+    func testFutureZeroEnergyTimestampUsesPersistedClampedWindowAnchor() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 3)
+        let future = Int64(1_700_000_000_000 + 90 * 86_400_000)
+        let writer = try DatabaseQueue(path: legacyURL.path)
+        try await writer.write { db in try db.execute(sql: "UPDATE EnergyHistory SET timestamp = ? WHERE energyNJ = 0", arguments: [future]) }
+        let history = try makeHistory()
+        let fixedNow = Date(timeIntervalSince1970: Double(1_700_000_000_000 + 2 * 86_400_000) / 1000)
+        let box = ImportTaskBox()
+        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1), now: { fixedNow }, progress: { progress in
+            if progress.importedHours == 1 { box.cancel() }
+        })
+        let task = importer.start()
+        box.set(task)
+        do {
+            try await task.value
+            XCTFail("the fixture should interrupt after the first committed hour")
+        } catch is CancellationError {
+            // The anchor and first hour are durable before cancellation.
+        }
+
+        let values = try await history.dbPool.read { db in
+            (try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.windowAnchor'"),
+             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0"),
+             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppUsageMinute WHERE metricVersion=0"))
+        }
+        XCTAssertEqual(values.0, String(1_700_000_000_000 + 2 * 86_400_000))
+        XCTAssertEqual(values.1, 2)
+        XCTAssertEqual(values.2, 2)
+        let resumedNow = Date(timeIntervalSince1970: Double(1_700_000_000_000 + 100 * 86_400_000) / 1000)
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1), now: { resumedNow }).run()
+        let anchorAfterResume = try await history.dbPool.read { db in try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.windowAnchor'") }
+        XCTAssertEqual(anchorAfterResume, values.0)
+        let resumedCounts = try await history.dbPool.read { db in
+            (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0"),
+             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppUsageMinute WHERE metricVersion=0"))
+        }
+        XCTAssertEqual(resumedCounts.0, 6)
+        XCTAssertEqual(resumedCounts.1, 6)
+    }
+
+    func testImmutableLegacyOpenLeavesWALSidecarsUntouched() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        let walURL = URL(fileURLWithPath: legacyURL.path + "-wal")
+        let shmURL = URL(fileURLWithPath: legacyURL.path + "-shm")
+        let sentinel = Data("do-not-touch".utf8)
+        try sentinel.write(to: walURL)
+        try sentinel.write(to: shmURL)
+        let history = try makeHistory()
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1)).run()
+        XCTAssertEqual(try Data(contentsOf: walURL), sentinel)
+        XCTAssertEqual(try Data(contentsOf: shmURL), sentinel)
+    }
+
+    func testConflictingBatteryAndEventPayloadsFailVerification() async throws {
+        for conflict in ["battery", "event"] {
+            let dir = try directory()
+            let legacyURL = dir.appendingPathComponent("db.sqlite")
+            try makeLegacy(at: legacyURL, days: 1)
+            let history = try makeHistory()
+            try await history.dbPool.write { db in
+                if conflict == "battery" {
+                    try BatterySnapshot(timestamp: 1_700_043_200_000, levelPercent: 12, capacityMAh: nil, designMAh: nil,
+                                        cycleCount: nil, voltageMV: nil, amperageMA: nil, temperatureC: nil,
+                                        timeRemainingMin: nil, isCharging: false, isACPlugged: false).insert(db)
+                } else {
+                    try db.execute(sql: "INSERT INTO PowerEvents(timestamp, eventType, durationSeconds, metadata) VALUES (1700043200000, 'sleep', 9, 'different')")
+                }
+            }
+            do {
+                try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1)).run()
+                XCTFail("a conflicting \(conflict) payload must fail verification")
+            } catch let error as LegacyImportError {
+                guard case .verificationFailed = error else { return XCTFail("unexpected error: \(error)") }
+            }
+        }
+    }
+
+    func testUnexpectedExtraPowerEventFailsCountVerification() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        let history = try makeHistory()
+        try await history.dbPool.write { db in
+            try db.execute(sql: "INSERT INTO PowerEvents(timestamp, eventType, durationSeconds, metadata) VALUES (1700043200001, 'plug', NULL, NULL)")
+        }
+        do {
+            try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1)).run()
+            XCTFail("an unexpected event row must fail verification")
+        } catch let error as LegacyImportError {
+            guard case .verificationFailed = error else { return XCTFail("unexpected error: \(error)") }
+        }
+    }
+
+    func testConcurrentRunsAreSingleFlightAndKeepRawRowsUniqueByReplay() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 8)
+        let history = try makeHistory()
+        let overlap = RunOverlapRecorder()
+        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1), progress: { _ in
+            overlap.recordOverlap()
+        })
+        async let first: Void = importer.run()
+        async let second: Void = importer.run()
+        _ = try await (first, second)
+
+        let counts = try await history.dbPool.read { db in
+            (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0") ?? 0,
+             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM BucketSampleRaw WHERE metricVersion=0") ?? 0,
+             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppUsageHour WHERE metricVersion=0") ?? 0)
+        }
+        XCTAssertEqual(counts.0, 14)
+        XCTAssertEqual(counts.1, 21)
+        XCTAssertEqual(counts.2, 16)
+        XCTAssertEqual(overlap.maximum, 1, "only one run may be active at a time")
+    }
+
+    func testReplayingCommittedHourReplacesRawRowsAndVerifiesRawTotals() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        let history = try makeHistory()
+        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1))
+        try await importer.run()
+        let cursor = try await history.dbPool.read { db in try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key='legacy.cursorHour'")! }
+        try await history.dbPool.write { db in
+            try db.execute(sql: "UPDATE Meta SET value=? WHERE key='legacy.cursorHour'", arguments: [String(cursor - 1)])
+            try db.execute(sql: "UPDATE Meta SET value='importing' WHERE key='legacy.state'")
+        }
+        try await importer.run()
+        let stateAndRows = try await history.dbPool.read { db in
+            (try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'"),
+             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0"),
+             try Int64.fetchOne(db, sql: "SELECT SUM(energyNJ) FROM AppSampleRaw WHERE metricVersion=0"))
+        }
+        XCTAssertEqual(stateAndRows.0, "done")
+        XCTAssertEqual(stateAndRows.1, 2)
+        XCTAssertEqual(stateAndRows.2, 203)
+    }
+
+    func testImportedMetricVersionQueriesDoNotDoubleCountAndKeepMinuteOnlyHistory() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 32)
+        let history = try makeHistory()
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1)).run()
+
+        for range in [HistoryRange.h1, .h6, .h24, .d7] {
+            let interval = DateInterval(start: Date(timeIntervalSince1970: 1_700_691_200), end: Date(timeIntervalSince1970: 1_702_764_800))
+            let rows = try await history.historyEnergy(in: interval, range: range, metricVersion: EnergyMetric.legacyVersion)
+            XCTAssertEqual(rows.reduce(Int64(0)) { $0 + $1.energyNJ }, 5_808, "legacy total should be counted once for \(range.rawValue)")
+        }
+
+        let minuteOnlyInterval = DateInterval(start: Date(timeIntervalSince1970: Double(1_700_000_000_000 + 8 * 86_400_000) / 1000),
+                                              end: Date(timeIntervalSince1970: Double(1_700_000_000_000 + 25 * 86_400_000) / 1000))
+        let minuteOnly = try await history.historyEnergy(in: minuteOnlyInterval, range: .h1, metricVersion: EnergyMetric.legacyVersion)
+        XCTAssertEqual(minuteOnly.reduce(Int64(0)) { $0 + $1.energyNJ }, 3_995)
+        let tiers = try await history.dbPool.read { db in
+            (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0 AND ts < ?", arguments: [1_700_000_000_000 + 25 * 86_400_000]) ?? 0,
+             try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='rollup.minuteWatermark'"),
+             try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='rollup.hourWatermark'"))
+        }
+        XCTAssertEqual(tiers.0, 0, "this 8–25 day interval exists only in the minute tier")
+        XCTAssertNotNil(tiers.1)
+        XCTAssertNotNil(tiers.2)
+    }
+
     func testCancelledImportResumesAndMatchesUninterruptedResult() async throws {
         let dir = try directory()
         let legacyURL = dir.appendingPathComponent("db.sqlite")
         try makeLegacy(at: legacyURL, days: 4)
         let resumed = try makeHistory()
         let box = ImportTaskBox()
-        let importer = LegacyDatabaseImporter(history: resumed, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1)) { progress in
+        let importer = LegacyDatabaseImporter(history: resumed, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1), progress: { progress in
             if progress.importedHours == 1 { box.cancel() }
-        }
+        })
         let task = importer.start()
         box.set(task)
         do {
