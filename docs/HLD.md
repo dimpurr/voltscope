@@ -41,13 +41,13 @@
 │  │                     Sampling Layer                          ││
 │  │  ┌────────────────┐  ┌──────────────┐  ┌────────────────┐ ││
 │  │  │ ProcessSampler │  │BatterySampler│  │ EventListener  │ ││
-│  │  │  (see below) │  │ (see below)│ │ NSWorkspace +  │ ││
+│  │  │ (see below)    │  │ (see below)  │  │ NSWorkspace +  │ ││
 │  │  │ proc_pid_rusage│  │IOPMPowerSrc  │  │ IOKit notif.   │ ││
 │  │  └────────┬───────┘  └──────┬───────┘  └───────┬────────┘ ││
 │  └───────────┼─────────────────┼──────────────────┼──────────┘ │
 │  ┌───────────▼─────────────────▼──────────────────▼──────────┐│
 │  │                Persistence Layer (GRDB.swift)              ││
-│  │   Database location follows                                 ││
+│  │   Database location follows                                ││
 │  └────────────────────────────────────────────────────────────┘│
 │                              ▲                                  │
 └──────────────────────────────┼──────────────────────────────────┘
@@ -121,7 +121,7 @@ Indexes: `(timestamp)`, `(bundleIdentifier, timestamp)`, `(year, month, day)`.
 
 ### `BatteryStatus`
 
-System-level battery state. ~30s sampling cadence.
+System-level battery state. Sampling cadence follows the Battery Sampling Loop below.
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -157,7 +157,7 @@ One row per `bundleIdentifier` (or `processName` for bundle-less daemons). Recom
 | `bundleIdentifier` | TEXT PK | `NULL` for bundle-less daemons; key on `processName` instead |
 | `processName` | TEXT | Fallback identity |
 | `hourOfDay` | INTEGER | 0–23; baseline is per-hour to handle apps with predictable diurnal load |
-| `meanEnergyNJPerSample` | INTEGER | 30-day mean of `energyNJ` per 5s sample within this hour |
+| `meanEnergyNJPerSample` | INTEGER | 30-day mean of `energyNJ` per process sample within this hour |
 | `stddevEnergyNJ` | INTEGER | Population stddev within the same window |
 | `sampleCount` | INTEGER | Number of contributing samples; used to gate notifications (require `>= 100` samples to trust the baseline) |
 | `lastRecomputedAt` | INTEGER | Unix epoch ms |
@@ -328,7 +328,7 @@ Storage: ~3 MB raw per day (30 processes × 17,280 samples × ~50 B/row). Compac
 
 These are deliberately unresolved at the design-phase commit and will be settled during implementation:
 
-1. **Sampling cadence for sleeping/idle Macs.** When the system enters deep sleep, the 5s timer is suspended. On wake, do we backfill an "unknown" gap row, or skip the gap and let the chart draw a discontinuity? Probably the latter, with the gap visualized via `PowerEvents`.
+1. **Sampling cadence for sleeping/idle Macs.** When the system enters deep sleep, the process sampling timer is suspended. On wake, do we backfill an "unknown" gap row, or skip the gap and let the chart draw a discontinuity? Probably the latter, with the gap visualized via `PowerEvents`.
 
 2. **Process identity across PID reuse.** A short-lived process can finish and its PID be reused within the same sample window. Currently we key on `(timestamp, pid)`. If misattribution is observed, we may need to also hash the process start time.
 

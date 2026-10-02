@@ -1,6 +1,6 @@
 # Documentation index
 
-Status: prepared for v0.9.0 (build 9); publication is maintained by the release owner.
+Release status and version history are maintained in [CHANGELOG.md](../CHANGELOG.md).
 
 ## Source of truth
 

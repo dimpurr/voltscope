@@ -28,7 +28,7 @@
 - Shows the current app version beside `Check for Updates` and replaces the
   generic Sparkle error with a clear unavailable-service message.
 - Makes the menu bar `Settings` action open the dedicated settings window
-  reliably on supported macOS releases.
+  reliably on macOS 13 and newer.
 - Uses a neutral system background for `Open History`, removes unnecessary
   ellipses from menu actions, and keeps the first-run Welcome context visible
   while Login Items is open.

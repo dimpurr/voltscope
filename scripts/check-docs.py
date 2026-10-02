@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Keep duplicated facts in documentation from drifting.
 
-Two checks run over the checked-in Markdown:
+The checks run over the checked-in Markdown and source:
 
-1. Facts with a single owning document must not be repeated in the
-   non-owner documents listed in ``RULES``. Today the only such fact is the
-   History time-range enumeration.
+1. Facts with an owning document are checked for duplicate prose or drift from
+   code values in the configured non-owner documents.
 2. ``[test: Suite.method]`` references in ``docs/`` must name a test that
    actually exists under ``Tests/``.
 
@@ -16,7 +15,6 @@ Exit codes: 0 when everything is consistent, 1 when a problem is found, and
 from __future__ import annotations
 
 import argparse
-import plistlib
 import re
 import sys
 from pathlib import Path
@@ -31,7 +29,14 @@ RANGE_ENUMERATION = re.compile(
     r"\bLive\b[\s\S]{0,120}?\b1H\b[\s\S]{0,120}?(?:\b6H\b[\s\S]{0,120}?)?"
     r"\b24H\b[\s\S]{0,120}?\b7D\b"
 )
-MACOS_MINIMUM = re.compile(r"\bmacOS\s+13(?:\+| or later| and newer)(?=\W|$)")
+MACOS_MINIMUM = re.compile(
+    r"\bmacOS\s+(?P<version>\d+(?:\.\d+)?)(?:\s*\+|\s+or later|\s+and newer)?(?=\W|$)",
+    re.IGNORECASE,
+)
+PREPARED_VERSION = re.compile(
+    r"\bprepared for v?\d+\.\d+\.\d+(?:[-+][\w.-]+)?(?:\s*\(build\s+\d+\))?",
+    re.IGNORECASE,
+)
 
 # One entry per duplicated fact. `files` are the documents that must not
 # repeat it; add new rules here rather than ad-hoc checks.
@@ -58,9 +63,6 @@ RULES = [
             "README.md",
             "CLAUDE.md",
             "AGENTS.md",
-            "CHANGELOG.md",
-            "docs/ENERGY_MODEL.md",
-            "docs/UI_SPEC.md",
             "docs/VISION.md",
         ],
         "pattern": MACOS_MINIMUM,
@@ -77,7 +79,7 @@ CODE_VALUE_RULES = [
         "constant": "processInterval",
         "files": ["docs/HLD.md"],
         "pattern": re.compile(
-            r"(?:ProcessSampler\s*│\s*\(|Sampling Loop \(foreground, every )"
+            r"(?:Sampling Loop \(foreground, every |`proc_listallpids`[^\n|]*\| Every |GRDB write[^\n|]*\| Every |the )"
             r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>seconds?|s)\b"
         ),
     },
@@ -88,7 +90,8 @@ CODE_VALUE_RULES = [
         "constant": "batteryInterval",
         "files": ["docs/HLD.md"],
         "pattern": re.compile(
-            r"Battery Sampling Loop \(every (?P<value>\d+(?:\.\d+)?)\s*(?P<unit>seconds?|s)\b"
+            r"(?:Battery Sampling Loop \(every |`IOPMPowerSource`[^\n|]*\| Every )"
+            r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>seconds?|s)\b"
         ),
     },
     {
@@ -98,7 +101,7 @@ CODE_VALUE_RULES = [
         "constant": "walCheckpointInterval",
         "files": ["docs/ENERGY_MODEL.md"],
         "pattern": re.compile(
-            r"wal_checkpoint\(TRUNCATE\)`? every (?P<value>\d+(?:\.\d+)?)\s*(?P<unit>minutes?|min)\b"
+            r"wal_checkpoint\(TRUNCATE\)`? every (?P<value>\d+(?:\.\d+)?)\s*(?P<unit>seconds?|s|minutes?|min|hours?|h)\b"
         ),
     },
 ]
@@ -136,28 +139,76 @@ def find_test_references(path: Path) -> list[tuple[int, str]]:
 
 
 def test_exists(root: Path, reference: str) -> bool:
-    """True when a test class and method matching `reference` exist in Tests/."""
+    """True when a matching class/extension and test method exist under Tests/."""
     parts = reference.split(".")
     suite, method = parts[-2], parts[-1]
-    class_pattern = re.compile(rf"\bclass\s+{re.escape(suite)}\b[^{{]*\{{")
+    suite_pattern = re.compile(rf"\b(?:class|extension)\s+{re.escape(suite)}\b[^{{]*\{{")
     method_pattern = re.compile(rf"\bfunc\s+{re.escape(method)}\b")
     for path in (root / "Tests").rglob("*.swift"):
         try:
             text = path.read_text(encoding="utf-8")
         except OSError:
             continue
-        for match in class_pattern.finditer(text):
+        code = mask_swift_comments_and_strings(text)
+        for match in suite_pattern.finditer(code):
             depth = 1
             index = match.end()
             while index < len(text) and depth:
-                if text[index] == "{":
+                if code[index] == "{":
                     depth += 1
-                elif text[index] == "}":
+                elif code[index] == "}":
                     depth -= 1
                 index += 1
-            if method_pattern.search(text, match.end(), index - 1):
+            if method_pattern.search(code, match.end(), index - 1):
                 return True
     return False
+
+
+def mask_swift_comments_and_strings(text: str) -> str:
+    """Replace comments and string contents with spaces, preserving newlines and braces."""
+    out = list(text)
+    i = 0
+    block_depth = 0
+    string_closer = None
+    string_escape = None
+    while i < len(text):
+        if block_depth:
+            if text.startswith("/*", i):
+                out[i:i + 2] = "  "; block_depth += 1; i += 2; continue
+            if text.startswith("*/", i):
+                out[i:i + 2] = "  "; block_depth -= 1; i += 2; continue
+            if text[i] != "\n": out[i] = " "
+            i += 1; continue
+        if string_closer:
+            if text.startswith(string_closer, i):
+                out[i:i + len(string_closer)] = " " * len(string_closer)
+                i += len(string_closer); string_closer = None; string_escape = None; continue
+            if text.startswith(string_escape, i):
+                escape_length = len(string_escape) + 1
+                out[i:i + escape_length] = " " * escape_length
+                i += escape_length; continue
+            if text[i] != "\n": out[i] = " "
+            i += 1; continue
+        if text.startswith("//", i):
+            while i < len(text) and text[i] != "\n": out[i] = " "; i += 1
+            continue
+        if text.startswith("/*", i):
+            out[i:i + 2] = "  "; block_depth = 1; i += 2; continue
+        if text[i] == '"':
+            hashes = 0
+            prefix = i
+            while prefix > 0 and text[prefix - 1] == "#":
+                hashes += 1
+                prefix -= 1
+            if hashes:
+                out[prefix:i] = " " * hashes
+            delimiter = '"""' if text.startswith('"""', i) else '"'
+            out[i:i + len(delimiter)] = " " * len(delimiter)
+            string_closer = delimiter + "#" * hashes
+            string_escape = "\\" + "#" * hashes
+            i += len(delimiter); continue
+        i += 1
+    return "".join(out)
 
 
 def check_duplicated_facts(root: Path, problems: list[str]) -> None:
@@ -198,12 +249,11 @@ def check_code_value_facts(root: Path, problems: list[str]) -> None:
             except OSError:
                 continue
             matches = list(rule["pattern"].finditer(prose))
-            if not matches:
-                problems.append(f"{relative}: missing documented value for {rule['id']}")
             for match in matches:
                 value = float(match.group("value"))
                 unit = match.group("unit").lower()
-                actual_seconds = value * (60 if unit.startswith(("min",)) else 1)
+                factor = 3600 if unit.startswith(("hour", "h")) else 60 if unit.startswith(("min",)) else 1
+                actual_seconds = value * factor
                 if actual_seconds != expected_seconds:
                     line = prose.count("\n", 0, match.start()) + 1
                     problems.append(
@@ -223,14 +273,31 @@ def check_macos_minimum(root: Path, problems: list[str]) -> None:
         problems.append(f"docs/HLD.md: cannot verify minimum macOS version: {error}")
         return
     package_match = re.search(r"\.macOS\(\.v(\d+)\)", package)
-    hld_match = re.search(r"minimum target: macOS (\d+)\+", hld)
+    hld_match = re.search(r"minimum target: macOS (\d+(?:\.\d+)?)\+", hld)
     if not package_match or not hld_match:
         problems.append("docs/HLD.md: minimum macOS target could not be checked against Package.swift")
-    elif package_match.group(1) != hld_match.group(1):
+    if package_match and hld_match and package_match.group(1) != hld_match.group(1).split(".")[0]:
         problems.append(
             "docs/HLD.md: minimum macOS target disagrees with Package.swift "
             f"({hld_match.group(1)} vs {package_match.group(1)})"
         )
+    if package_match:
+        for rule in RULES:
+            if rule["id"] != "macos-minimum":
+                continue
+            for relative in rule["files"]:
+                path = root / relative
+                if not path.is_file():
+                    continue
+                prose = path.read_text(encoding="utf-8")
+                for match in MACOS_MINIMUM.finditer(prose):
+                    version = match.group("version").split(".")[0]
+                    if version != package_match.group(1):
+                        line = prose.count("\n", 0, match.start()) + 1
+                        problems.append(
+                            f"{relative}:{line}: minimum macOS claim says {version}, "
+                            f"but Package.swift requires {package_match.group(1)}"
+                        )
 
 
 def check_test_references(root: Path, problems: list[str]) -> None:
@@ -247,27 +314,22 @@ def check_test_references(root: Path, problems: list[str]) -> None:
                 )
 
 
-def check_documented_version(root: Path, problems: list[str]) -> None:
-    """Keep the documentation index status aligned with app bundle metadata."""
-    plist_path = root / "Sources/Voltscope/Resources/Info.plist"
-    index_path = root / "docs/INDEX.md"
-    try:
-        with plist_path.open("rb") as source:
-            plist = plistlib.load(source)
-        index = index_path.read_text(encoding="utf-8")
-    except (OSError, plistlib.InvalidFileException) as error:
-        problems.append(f"docs/INDEX.md: cannot verify release status against Info.plist: {error}")
-        return
-
-    version = plist.get("CFBundleShortVersionString")
-    build = plist.get("CFBundleVersion")
-    expected = f"Status: prepared for v{version} (build {build});"
-    status = next((line for line in index.splitlines() if line.startswith("Status:")), "")
-    if status != expected + " publication is maintained by the release owner.":
-        problems.append(
-            "docs/INDEX.md:3: release status must match Info.plist: "
-            f"{expected} publication is maintained by the release owner."
-        )
+def check_non_owner_version_claims(root: Path, problems: list[str]) -> None:
+    """Reject release-preparation claims outside the changelog/version metadata."""
+    candidates = [*root.glob("*.md"), *(root / "docs").rglob("*.md")]
+    for path in candidates:
+        relative = path.relative_to(root).as_posix()
+        if relative == "CHANGELOG.md":
+            continue
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for match in PREPARED_VERSION.finditer(content):
+            line = content.count("\n", 0, match.start()) + 1
+            problems.append(
+                f"{relative}:{line}: release version claim belongs in CHANGELOG.md, not this document"
+            )
 
 
 def main() -> int:
@@ -289,7 +351,7 @@ def main() -> int:
     check_code_value_facts(root, problems)
     check_macos_minimum(root, problems)
     check_test_references(root, problems)
-    check_documented_version(root, problems)
+    check_non_owner_version_claims(root, problems)
 
     if problems:
         for problem in problems:

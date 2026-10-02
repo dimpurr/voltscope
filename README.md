@@ -89,7 +89,7 @@ database location is documented in the [architecture guide](docs/HLD.md#data-mod
 
 Requirements:
 
-- The minimum macOS version recorded in [the architecture guide](docs/HLD.md)
+- Voltscope requires the minimum macOS version recorded in [the architecture guide](docs/HLD.md)
 - Xcode 16.3+ or a compatible Swift 6.1+ toolchain
 
 Clone the repository and run the tests:
