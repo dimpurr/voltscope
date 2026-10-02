@@ -19,6 +19,10 @@ final class HistoryWriterTests: XCTestCase {
         try db.dbPool.read { conn in try Row.fetchAll(conn, sql: sql) }
     }
 
+    private func sum(_ db: HistoryDatabase, sql: String) async throws -> Int64 {
+        try await db.dbPool.read { conn in try Int64.fetchOne(conn, sql: sql) ?? 0 }
+    }
+
     func testTickWritingRollupsAreIdempotentAcrossHourAndDayBoundaries() async throws {
         let db = try HistoryDatabase.makeInMemory()
         let start = epoch(2025, 1, 1, 23, 58)
@@ -130,6 +134,69 @@ final class HistoryWriterTests: XCTestCase {
         XCTAssertEqual(hourWatermark, String(Int64(now.timeIntervalSince1970 / 3600) - 1))
     }
 
+    func testHourRollupWaitsForMinuteWatermarkAndRebuildsIdempotently() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let hourStart = epoch(2025, 2, 3, 10)
+        for (minute, energy) in [(58, 13), (59, 17)] {
+            try await db.writeTick(
+                timestamp: hourStart + Int64(minute * 60_000),
+                apps: [SampledApp(groupKey: "boundary", displayName: "Boundary", pid: 7,
+                                  energyNJ: Int64(energy), cpuNs: Int64(energy * 2))],
+                buckets: [SampledBucket(name: "cpu", energyNJ: Int64(energy * 3))],
+                coverage: SampleCoverage(visible: Int64(minute), unreadable: 1)
+            )
+        }
+
+        let firstRun = Date(timeIntervalSince1970: Double(hourStart + 60 * 60_000 + 30_000) / 1000)
+        try await db.runMaintenance(now: firstRun)
+        let beforeHourSeal = try await db.dbPool.read { conn in
+            (
+                try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppUsageHour") ?? 0,
+                try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM BucketHour") ?? 0,
+                try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM CoverageHour") ?? 0
+            )
+        }
+        XCTAssertEqual(beforeHourSeal.0, 0)
+        XCTAssertEqual(beforeHourSeal.1, 0)
+        XCTAssertEqual(beforeHourSeal.2, 0)
+
+        let secondRun = Date(timeIntervalSince1970: Double(hourStart + 65 * 60_000) / 1000)
+        try await db.runMaintenance(now: secondRun)
+        let rawAppEnergy = try await sum(db, sql: "SELECT SUM(energyNJ) FROM AppSampleRaw")
+        let appHourEnergy = try await sum(db, sql: "SELECT SUM(energyNJ) FROM AppUsageHour")
+        let rawBucketEnergy = try await sum(db, sql: "SELECT SUM(energyNJ) FROM BucketSampleRaw")
+        let bucketHourEnergy = try await sum(db, sql: "SELECT SUM(energyNJ) FROM BucketHour")
+        let coverageTicks = try await sum(db, sql: "SELECT SUM(ticks) FROM CoverageHour")
+        let coverageVisible = try await sum(db, sql: "SELECT SUM(visibleSum) FROM CoverageHour")
+        let coverageUnreadable = try await sum(db, sql: "SELECT SUM(unreadableSum) FROM CoverageHour")
+        XCTAssertEqual(rawAppEnergy, 30)
+        XCTAssertEqual(appHourEnergy, rawAppEnergy)
+        XCTAssertEqual(rawBucketEnergy, 90)
+        XCTAssertEqual(bucketHourEnergy, rawBucketEnergy)
+        XCTAssertEqual(coverageTicks, 2)
+        XCTAssertEqual(coverageVisible, 117)
+        XCTAssertEqual(coverageUnreadable, 2)
+
+        try await db.dbPool.write { conn in
+            try conn.execute(sql: "DELETE FROM Meta WHERE key IN ('rollup.minuteWatermark', 'rollup.hourWatermark')")
+        }
+        try await db.runMaintenance(now: secondRun)
+        let rebuiltAppMinuteEnergy = try await sum(db, sql: "SELECT SUM(energyNJ) FROM AppUsageMinute")
+        let rebuiltAppHourEnergy = try await sum(db, sql: "SELECT SUM(energyNJ) FROM AppUsageHour")
+        let rebuiltBucketMinuteEnergy = try await sum(db, sql: "SELECT SUM(energyNJ) FROM BucketMinute")
+        let rebuiltBucketHourEnergy = try await sum(db, sql: "SELECT SUM(energyNJ) FROM BucketHour")
+        let rebuiltCoverageTicks = try await sum(db, sql: "SELECT SUM(ticks) FROM CoverageHour")
+        let rebuiltCoverageVisible = try await sum(db, sql: "SELECT SUM(visibleSum) FROM CoverageHour")
+        let rebuiltCoverageUnreadable = try await sum(db, sql: "SELECT SUM(unreadableSum) FROM CoverageHour")
+        XCTAssertEqual(rebuiltAppMinuteEnergy, rawAppEnergy)
+        XCTAssertEqual(rebuiltAppHourEnergy, appHourEnergy)
+        XCTAssertEqual(rebuiltBucketMinuteEnergy, rawBucketEnergy)
+        XCTAssertEqual(rebuiltBucketHourEnergy, bucketHourEnergy)
+        XCTAssertEqual(rebuiltCoverageTicks, coverageTicks)
+        XCTAssertEqual(rebuiltCoverageVisible, coverageVisible)
+        XCTAssertEqual(rebuiltCoverageUnreadable, coverageUnreadable)
+    }
+
     func testConfiguredThreeDayRetentionLeavesHoursUntouched() async throws {
         let db = try HistoryDatabase.makeInMemory()
         let old = epoch(2025, 3, 1, 12)
@@ -153,7 +220,7 @@ final class HistoryWriterTests: XCTestCase {
         try await db.dbPool.write { conn in
             try MetaEntry(key: "settings.rawRetentionDays", value: "3").insert(conn)
         }
-        let later = now.addingTimeInterval(2 * 86_400)
+        let later = now.addingTimeInterval(86_400)
         try await db.runMaintenance(now: later)
 
         let values = try await db.dbPool.read { conn in

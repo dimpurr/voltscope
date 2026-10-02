@@ -142,7 +142,7 @@ public extension HistoryDatabase {
         try await dbPool.write { db in
             let minuteWatermark = try Self.watermark(db, key: "rollup.minuteWatermark")
             let hourWatermark = try Self.watermark(db, key: "rollup.hourWatermark")
-            let upperBound = min(currentHour, minuteWatermark / 60 + 1)
+            let upperBound = min(currentHour, minuteWatermark / 60)
             guard upperBound > hourWatermark + 1 else { return }
             try db.execute(sql: """
                 INSERT OR REPLACE INTO AppUsageHour
