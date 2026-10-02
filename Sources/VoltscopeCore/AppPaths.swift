@@ -20,4 +20,10 @@ public enum AppPaths {
     public static func databaseURL() throws -> URL {
         try applicationSupportDirectory().appendingPathComponent("db.sqlite", isDirectory: false)
     }
+
+    /// Tiered history store introduced in 0.10. Lives next to the legacy
+    /// database; the two files are independent.
+    public static func historyDatabaseURL() throws -> URL {
+        try applicationSupportDirectory().appendingPathComponent("history.sqlite", isDirectory: false)
+    }
 }
