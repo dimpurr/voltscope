@@ -98,6 +98,30 @@ final class BucketDeduplicationTests: XCTestCase {
         XCTAssertEqual(BucketSampler.selectedChannelNames(names), ["EACC_CPU", "PACC0_CPU"])
     }
 
+    // Synthetic channel names use the M2 Ultra dump in macmon issue #17 and
+    // the M5 naming in the Zeus Apple Silicon table; neither is a local measurement.
+    func testM2UltraGPUChildrenAreSuppressedBesideSummaryButSRAMIsKept() {
+        let names = ["GPU0_0", "GPU CS0_0", "GPU SRAM0_0", "GPU Energy"]
+        XCTAssertEqual(BucketSampler.selectedChannelNames(names), ["GPU SRAM0_0", "GPU Energy"])
+        XCTAssertEqual(BucketSampler.selectedChannelNames(names.map { "DIE_0_\($0)" }),
+                       ["DIE_0_GPU SRAM0_0", "DIE_0_GPU Energy"])
+    }
+
+    func testM5WithoutSummaryKeepsClusterTotalsInsteadOfMixedCoreLevel() {
+        let names = ["MCPU0", "MCPU1", "PCPU", "MCPU0_0", "PACC_0", "MCPM0"]
+        XCTAssertEqual(BucketSampler.selectedChannelNames(names), ["MCPU0", "MCPU1", "PCPU"])
+    }
+
+    func testOnlyCPUCoreLevelIsKeptWhenNoSummaryOrClustersExist() {
+        let names = ["MCPU0_0", "MCPU0_1", "PACC_0", "MCPM0"]
+        XCTAssertEqual(BucketSampler.selectedChannelNames(names), ["MCPU0_0", "MCPU0_1", "PACC_0"])
+    }
+
+    func testOnlyCPUClusterLevelIsKept() {
+        let names = ["MCPU0", "MCPU1", "PCPU"]
+        XCTAssertEqual(BucketSampler.selectedChannelNames(names), ["MCPU0", "MCPU1", "PCPU"])
+    }
+
     func testUnknownCPUFamilyIsDroppedOnlyWhenSummaryExists() {
         let names = ["CPU Energy", "MYSTERY_ACC_CPU", "Unclassified Rail"]
         XCTAssertEqual(BucketSampler.selectedChannelNames(names), ["CPU Energy", "Unclassified Rail"])
@@ -107,6 +131,7 @@ final class BucketDeduplicationTests: XCTestCase {
     func testGPUSRAMHasItsOwnBucketForBothNames() {
         XCTAssertEqual(BucketSampler.normalizeBucketName("GPU SRAM"), "GPU SRAM")
         XCTAssertEqual(BucketSampler.normalizeBucketName("GPU SRAM0"), "GPU SRAM")
+        XCTAssertEqual(BucketSampler.normalizeBucketName("GPU SRAM0_0"), "GPU SRAM")
         XCTAssertEqual(BucketSampler.selectedChannelNames(["GPU Energy", "GPU0", "GPU SRAM", "GPU SRAM0"]),
                        ["GPU Energy", "GPU SRAM", "GPU SRAM0"])
     }

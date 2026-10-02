@@ -290,12 +290,14 @@ per-process hardware-estimated CPU energy. It converts `ri_user_time` and
 `ri_system_time` using the active Mach timebase before recording nanoseconds.
 The first observation establishes a baseline, and intervals with zero energy
 delta do not emit process rows. The system bucket sampler selects a summary
-channel per die when available, or one CPU cluster level when no CPU summary
-exists. GPU SRAM is a separate bucket. IOReport channels without an Energy unit
-are skipped. Process coverage counts include successful reads and `EPERM`
-failures; transient process exits such as `ESRCH` are excluded. Coverage and
-energy-availability state are exposed by the sampling coordinator but are not
-persisted in the current schema.
+channel per die when available, or CPU cluster channels when no CPU summary
+exists; CPU core channels are retained only when that die has neither a CPU
+summary nor any cluster total. GPU Energy suppresses GPU child channels on the
+same die, while GPU SRAM remains a separate bucket. IOReport channels without
+an Energy unit are skipped. Process coverage counts include successful reads
+and `EPERM` failures; transient process exits such as `ESRCH` are excluded.
+Coverage and energy-availability state are exposed by the sampling coordinator
+but are not persisted in the current schema.
 
 Battery discharge integration requires both adjacent endpoints to be unplugged, non-charging, with nonpositive signed current and valid voltage. Gaps over 90 seconds and supply transitions are excluded; trapezoidal integration is clipped to the query bounds. This is observed discharge, not a full-window total. Sleep and missing coverage are not inferred. Hardware channels are displayed independently in joules without battery percentages or subtraction-based Other.
 

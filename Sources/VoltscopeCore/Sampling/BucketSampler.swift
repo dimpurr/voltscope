@@ -21,6 +21,7 @@ public final class BucketSampler: @unchecked Sendable {
         for names in byDie.values {
             let normalized = names.map { ($0, dieIndexAndName($0).name) }
             let hasCPUSummary = normalized.contains { isCPUSummary($0.1) }
+            let hasCPUCluster = normalized.contains { isCPUCluster($0.1) }
             let hasGPUSummary = normalized.contains { $0.1.caseInsensitiveCompare("GPU Energy") == .orderedSame }
             for (original, name) in normalized {
                 if isCPUSummary(name) || name.caseInsensitiveCompare("GPU Energy") == .orderedSame {
@@ -29,7 +30,9 @@ public final class BucketSampler: @unchecked Sendable {
                     continue
                 } else if hasGPUSummary && isGPUCore(name) {
                     continue
-                } else if isCPUCluster(name) || isGPUCore(name) {
+                } else if hasCPUCluster && isCPUCore(name) {
+                    continue
+                } else if isCPUCluster(name) || isCPUCore(name) || isGPUCore(name) {
                     selected.insert(original)
                 } else if isCPUFamily(name) {
                     continue
@@ -62,13 +65,20 @@ public final class BucketSampler: @unchecked Sendable {
 
     private static func isCPUCluster(_ name: String) -> Bool {
         let value = name.uppercased()
-        return value == "EACC_CPU" || value.range(of: #"^PACC\d+(_CPU)?$"#, options: .regularExpression) != nil ||
+        return value == "EACC_CPU" || value.range(of: #"^PACC\d+_CPU$"#, options: .regularExpression) != nil ||
             value == "ECPU" || value == "PCPU" ||
-            value.range(of: #"^MCPU\d+_\d+$"#, options: .regularExpression) != nil
+            value.range(of: #"^MCPU\d+$"#, options: .regularExpression) != nil
+    }
+
+    private static func isCPUCore(_ name: String) -> Bool {
+        let value = name.uppercased()
+        return value.range(of: #"^MCPU\d+_\d+$"#, options: .regularExpression) != nil ||
+            value.range(of: #"^PACC_\d+$"#, options: .regularExpression) != nil
     }
 
     private static func isGPUCore(_ name: String) -> Bool {
-        name.range(of: #"(?i)^GPU\d+$"#, options: .regularExpression) != nil
+        name.range(of: #"(?i)^GPU\d+(?:_\d+)?$"#, options: .regularExpression) != nil ||
+            name.range(of: #"(?i)^GPU CS\d+(?:_\d+)?$"#, options: .regularExpression) != nil
     }
 
     /// Maps selected channels to distinct physical buckets. Unrecognized names
@@ -79,7 +89,7 @@ public final class BucketSampler: @unchecked Sendable {
         if lower.contains("ecpm") || lower.contains("pcpm") || lower.contains("cpm") { return "Power Mgmt" }
         if isCPUSummary(name) || isCPUFamily(name) { return "CPU" }
         if name.caseInsensitiveCompare("GPU Energy") == .orderedSame || isGPUCore(name) { return "GPU" }
-        if lower == "gpu sram" || lower.range(of: #"^gpu sram\d+$"#, options: .regularExpression) != nil { return "GPU SRAM" }
+        if lower == "gpu sram" || lower.range(of: #"^gpu sram\d+(?:_\d+)?$"#, options: .regularExpression) != nil { return "GPU SRAM" }
         if lower.contains("ane") { return "ANE" }
         if lower.contains("ave") { return "Video" }
         if lower.contains("isp") { return "Camera" }
