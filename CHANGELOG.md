@@ -1,12 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.9.1 — 2026-10-02
 
 - Process samples that recorded no energy for the interval are no longer
   stored, so the database grows much more slowly over long runs.
 - CSV export no longer includes zero-energy rows.
 - Existing databases do not shrink in this version; storage compaction is
   planned for 0.10.0.
+- Bundle metadata is 0.9.1 / build 10. This is a SemVer patch release because
+  it fixes stored data volume without changing features.
 
 ## 0.9.0 — 2026-09-14
 
