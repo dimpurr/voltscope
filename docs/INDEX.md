@@ -60,4 +60,5 @@ access to those materials.
   update `HLD.md` and, when energy semantics change, `ENERGY_MODEL.md`.
 - Release version, signature, notarization, installation, or publication:
   update `RELEASE.md`, `CHANGELOG.md`, `README.md`, and version metadata.
-- Contributor or agent workflow: update `AGENTS.md` and keep `CLAUDE.md` identical.
+- Contributor or agent workflow: `CLAUDE.md` owns the rules; `AGENTS.md` is a
+  short pointer to it, not a second copy.

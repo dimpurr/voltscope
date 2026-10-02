@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Process samples that recorded no energy for the interval are no longer
+  stored, so the database grows much more slowly over long runs.
+- CSV export no longer includes zero-energy rows.
+- Existing databases do not shrink in this version; storage compaction is
+  planned for 0.10.0.
+
 ## 0.9.0 — 2026-09-14
 
 - Added a first-run Welcome window for keeping sampling continuous at login.

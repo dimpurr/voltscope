@@ -21,8 +21,8 @@ link to it from the others.
 ## Durable product constraints
 
 - Voltscope is macOS 13+ and uses SwiftUI, SwiftUI Charts, and Swift Package Manager.
-- The History toolbar has one time control: Live / 1H / 24H / 7D. All history
-  surfaces follow that selection.
+- The History toolbar has one time control, and all history surfaces follow that
+  selection. Its options and bucket sizes are owned by `docs/UI_SPEC.md`.
 - App attribution is recorded CPU energy only. It must not be described as a
   complete allocation of whole-device battery drain.
 - Battery level is a 0–100% state-of-charge trace and is separate from app
