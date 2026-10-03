@@ -279,6 +279,12 @@ Their public English values and controls are:
 | `settings.rawRetention` | Raw detail retention period picker |
 | `settings.deleteLegacyDatabase` | Delete old database action |
 
+The History status bar's battery power value keeps its state-specific qualifier
+available both as hover help and as the combined accessibility element's hint.
+The qualifier distinguishes charging flow, battery discharge, and battery
+current while connected to AC; it does not describe total system or adapter
+power.
+
 ### Chart hover behavior (v0.5.2)
 
 Stacked bars are colored by app via `foregroundStyle(by:)`, which makes glance-interpretation hard once more than three apps are present — the legend becomes a memory-aid lookup table. Keep the hover detail contextual to the selected bucket:

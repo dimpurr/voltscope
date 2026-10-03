@@ -73,13 +73,18 @@ struct HistoryStatusBar: View {
             Text(drainText)
                 .font(.callout.monospacedDigit())
         }
+        .help(drainHelpText)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Battery power: \(drainAccessibilityValue)")
-        .accessibilityHint(AccessibilityLabels.batteryPowerHint(
+        .accessibilityHint(drainHelpText)
+    }
+
+    private var drainHelpText: String {
+        AccessibilityLabels.batteryPowerHint(
             available: battery != nil,
             isCharging: battery?.isCharging ?? false,
             isACPlugged: battery?.isACPlugged ?? false
-        ))
+        )
     }
 
     private var drainIconColor: Color {

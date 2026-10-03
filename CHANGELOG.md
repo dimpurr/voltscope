@@ -6,8 +6,8 @@
   History controls, and interactive Settings controls. Battery status values
   now have descriptive spoken labels for VoiceOver and UI automation. App-row
   History actions have per-app identifiers and labels that describe opening
-  History from the row; the battery power qualifier is exposed as an
-  accessibility hint.
+  History from the row; the battery power qualifier is available as hover help
+  and an accessibility hint.
 - App energy now uses the per-task CPU energy counter. Values may be hundreds
   or thousands of times larger than older readings because the previous counter
   reported energy billed through a task bank rather than the task’s own energy.
