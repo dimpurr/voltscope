@@ -78,7 +78,8 @@ struct HistoryWindow: View {
                                 .frame(maxWidth: .infinity, alignment: .topLeading)
                             Divider()
                             AppBreakdownList(entries: data.apps.map(\.breakdownEntry), sparklines: data.sparklines,
-                                             groupSystem: groupSystem, energyAvailable: appState.processEnergyAvailable)
+                                             groupSystem: groupSystem, energyAvailable: appState.processEnergyAvailable,
+                                             range: data.domain, bucketSeconds: range.bucketSeconds)
                                 .frame(maxWidth: .infinity, alignment: .topLeading)
                         }
                     } else {

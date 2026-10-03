@@ -352,6 +352,7 @@ This section supersedes all earlier History layout, chart, removal and legend ru
   the window returns Voltscope to accessory mode; it does not terminate the
   menubar sampler or database process.
 - Keyboard-accessible interval and app selection, accessible labels, compact legends, visible query errors and clear empty states.
+- VoiceOver chart summaries and audio graph descriptors expose the selected time range, minimum, maximum, latest observed value, units and named data series for the battery level and App CPU charts. Apps-column rows announce recorded CPU attribution and their observed trend; missing intervals are described as no data and are never interpolated. Older metric-version buckets are identified separately and never combined with current readings. App attribution wording remains limited to recorded per-app CPU energy and does not describe whole-device battery drain allocation.
 
 The wider per-device apportionment model remains future work. v0.8 ships the Battery interaction model with explicit CPU-only attribution and the ranges defined by `HistoryRange`.
 

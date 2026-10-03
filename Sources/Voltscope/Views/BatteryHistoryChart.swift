@@ -60,6 +60,33 @@ struct BatteryHistoryChart: View {
         return result
     }
 
+    private var accessibilityPoints: [HistoryChartAccessibility.Point] {
+        snapshots.compactMap { snapshot in
+            guard let level = snapshot.levelPercent else { return nil }
+            return HistoryChartAccessibility.Point(date: Date(timeIntervalSince1970: Double(snapshot.timestamp) / 1000),
+                                                   value: min(100, max(0, level)))
+        }
+    }
+
+    private var accessibilitySummary: String {
+        HistoryChartAccessibility.summary(title: "Battery level", range: domain, points: accessibilityPoints,
+                                          unit: "percent", bucketSeconds: 30, hasMissingIntervals: snapshots.contains { $0.levelPercent == nil },
+                                          scopeNote: "Battery state of charge, from 0 to 100 percent.")
+    }
+
+    private var chartDescriptor: HistoryAXChartDescriptor {
+        let grouped = Dictionary(grouping: levels, by: \.segment)
+        let series = grouped.keys.sorted().map { segment in
+            HistoryAXSeries(name: "Battery level segment \(segment + 1)",
+                            points: grouped[segment, default: []].map {
+                                AXDataPoint(x: $0.date.timeIntervalSince1970, y: $0.level, label: $0.date.formatted())
+                            }, isContinuous: true)
+        }
+        return HistoryAXChartDescriptor(title: "Battery level", summary: accessibilitySummary,
+                                        xTitle: "Time", yTitle: "Percent", xRange: domain.lowerBound.timeIntervalSince1970...domain.upperBound.timeIntervalSince1970,
+                                        yRange: 0...100, series: series)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -96,6 +123,9 @@ struct BatteryHistoryChart: View {
                 .chartXScale(domain: domain).chartYScale(domain: -17...100)
                 .chartXAxis(.hidden).chartYAxis(.hidden).chartLegend(.hidden)
                 .chartPlotStyle { $0.clipped() }
+                .accessibilityLabel("Battery level chart")
+                .accessibilityValue(accessibilitySummary)
+                .accessibilityChartDescriptor(chartDescriptor)
                 .overlay {
                     if levels.isEmpty { Text("No battery observations in this range").font(.caption).foregroundStyle(.secondary) }
                 }

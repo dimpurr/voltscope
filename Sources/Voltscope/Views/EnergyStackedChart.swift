@@ -32,6 +32,30 @@ struct EnergyStackedChart: View {
         return .dateTime.hour().minute()
     }
 
+    private var accessibilityPoints: [HistoryChartAccessibility.Point] {
+        model.bucketTotals.map { HistoryChartAccessibility.Point(date: $0.key, value: $0.value) }
+    }
+
+    private var accessibilitySummary: String {
+        HistoryChartAccessibility.summary(title: "App CPU energy", range: xDomain, points: accessibilityPoints,
+                                          unit: "joules", bucketSeconds: bucketSeconds,
+                                          mixedMetricVersions: !model.legacyBuckets.isEmpty,
+                                          scopeNote: "Recorded per-app CPU energy only; it is not an allocation of whole-device battery drain.")
+    }
+
+    private var chartDescriptor: HistoryAXChartDescriptor {
+        let series = model.series.map { item in
+            let points = model.segments.filter { $0.group == item.id }.map { segment in
+                AXDataPoint(x: segment.date.timeIntervalSince1970, y: segment.top - segment.bottom,
+                            label: "\(item.name), \(segment.date.formatted(date: .abbreviated, time: .shortened))")
+            }
+            return HistoryAXSeries(name: "\(item.name) recorded CPU energy", points: points, isContinuous: false)
+        }
+        return HistoryAXChartDescriptor(title: "App CPU energy", summary: accessibilitySummary,
+                                        xTitle: "Time", yTitle: "Joules", xRange: xDomain.lowerBound.timeIntervalSince1970...xDomain.upperBound.timeIntervalSince1970,
+                                        yRange: 0...max(model.upper, 0.01), series: series)
+    }
+
     private var valueLabels: some View {
         VStack {
             Text(model.upper.formatted(.number.precision(.fractionLength(1))))
@@ -76,6 +100,9 @@ struct EnergyStackedChart: View {
                     }
                 }
                 .chartPlotStyle { $0.clipped() }
+                .accessibilityLabel("App CPU energy chart")
+                .accessibilityValue(accessibilitySummary)
+                .accessibilityChartDescriptor(chartDescriptor)
                 .chartOverlay { proxy in
                     EnergyHoverOverlay(model: model, bucketSeconds: bucketSeconds, domain: xDomain, proxy: proxy)
                 }

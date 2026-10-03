@@ -7,6 +7,8 @@ struct AppBreakdownList: View {
     let sparklines: [String: [SparkPoint]]
     let groupSystem: Bool
     let energyAvailable: Bool
+    let range: ClosedRange<Date>
+    let bucketSeconds: Int
 
     var body: some View {
         // No internal ScrollView — HistoryWindow wraps the whole panel in a
@@ -25,7 +27,9 @@ struct AppBreakdownList: View {
                     sparkline: sparklines[entry.id] ?? [],
                     totalAll: totalEnergyNJ,
                     muted: false,
-                    energyAvailable: energyAvailable
+                    energyAvailable: energyAvailable,
+                    range: range,
+                    bucketSeconds: bucketSeconds
                 )
             }
 
@@ -35,7 +39,9 @@ struct AppBreakdownList: View {
                         entries: systemEntries,
                         sparklines: sparklines,
                         totalAll: totalEnergyNJ,
-                        energyAvailable: energyAvailable
+                        energyAvailable: energyAvailable,
+                        range: range,
+                        bucketSeconds: bucketSeconds
                     )
                 } else {
                     ForEach(systemEntries) { entry in
@@ -44,7 +50,9 @@ struct AppBreakdownList: View {
                             sparkline: sparklines[entry.id] ?? [],
                             totalAll: totalEnergyNJ,
                             muted: false,
-                            energyAvailable: energyAvailable
+                            energyAvailable: energyAvailable,
+                            range: range,
+                            bucketSeconds: bucketSeconds
                         )
                     }
                 }
@@ -78,6 +86,8 @@ private struct AppRow: View {
     let totalAll: Int64
     let muted: Bool
     let energyAvailable: Bool
+    let range: ClosedRange<Date>
+    let bucketSeconds: Int
 
     var body: some View {
         HStack(spacing: 8) {
@@ -104,6 +114,36 @@ private struct AppRow: View {
             )
         }
         .help(entry.bundleIdentifier ?? entry.processName)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(entry.processName)
+        .accessibilityValue(accessibilityValue)
+        .accessibilityChartDescriptor(chartDescriptor)
+    }
+
+    private var chartDescriptor: HistoryAXChartDescriptor {
+        let points = energyAvailable ? sparkline : []
+        let series = HistoryAXSeries(name: "\(entry.processName) recorded CPU energy", points: points.map {
+            AXDataPoint(x: $0.date.timeIntervalSince1970, y: $0.value, label: $0.date.formatted(date: .abbreviated, time: .shortened))
+        }, isContinuous: false)
+        let values = points.map(\.value)
+        let maximum = max(values.max() ?? 0, 0.01)
+        return HistoryAXChartDescriptor(title: "\(entry.processName) CPU energy trend", summary: accessibilityValue,
+                                        xTitle: "Time", yTitle: energyAvailable ? "Joules" : "Seconds CPU",
+                                        xRange: range.lowerBound.timeIntervalSince1970...range.upperBound.timeIntervalSince1970,
+                                        yRange: 0...maximum, series: [series])
+    }
+
+    private var accessibilityValue: String {
+        let value = energyAvailable
+            ? "\(joulesText) recorded CPU energy"
+            : "\(String(format: "%.1f", Double(entry.totalCPUNS) / 1_000_000_000)) seconds CPU time; per-process energy is unavailable"
+        let share = energyAvailable && totalAll > 0 ? ", \(percentText) of recorded App CPU energy" : ""
+        let points = energyAvailable ? sparkline.map { HistoryChartAccessibility.Point(date: $0.date, value: $0.value) } : []
+        let trend = energyAvailable
+            ? HistoryChartAccessibility.summary(title: "\(entry.processName) trend", range: range,
+                                                points: points, unit: "joules", bucketSeconds: bucketSeconds)
+            : "Trend unavailable because per-process energy is not provided on this Mac."
+        return "\(value)\(share). \(trend)"
     }
 
     private var joulesText: String {
@@ -127,6 +167,8 @@ private struct SystemGroupSection: View {
     let sparklines: [String: [SparkPoint]]
     let totalAll: Int64
     let energyAvailable: Bool
+    let range: ClosedRange<Date>
+    let bucketSeconds: Int
     @State private var expanded = false
 
     var body: some View {
@@ -138,7 +180,9 @@ private struct SystemGroupSection: View {
                         sparkline: sparklines[entry.id] ?? [],
                         totalAll: totalAll,
                         muted: true,
-                        energyAvailable: energyAvailable
+                        energyAvailable: energyAvailable,
+                        range: range,
+                        bucketSeconds: bucketSeconds
                     )
                 }
             }
