@@ -568,16 +568,18 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
                 try Task.checkCancellation()
                 let timestamp: Int64 = row["timestamp"]
                 if let existing = try Row.fetchOne(db, sql: "SELECT * FROM BatteryStatus WHERE timestamp = ?", arguments: [timestamp]) {
-                    let equal = (existing["levelPercent"] as Double?) == (row["levelPercent"] as Double?)
-                        && (existing["capacityMAh"] as Int?) == (row["capacityMAh"] as Int?)
-                        && (existing["designMAh"] as Int?) == (row["designMAh"] as Int?)
-                        && (existing["cycleCount"] as Int?) == (row["cycleCount"] as Int?)
-                        && (existing["voltageMV"] as Int?) == (row["voltageMV"] as Int?)
-                        && (existing["amperageMA"] as Int?) == (row["amperageMA"] as Int?)
-                        && (existing["temperatureC"] as Double?) == (row["temperatureC"] as Double?)
-                        && (existing["timeRemainingMin"] as Int?) == (row["timeRemainingMin"] as Int?)
-                        && (existing["isCharging"] as Bool) == (row["isCharging"] as Bool)
-                        && (existing["isACPlugged"] as Bool) == (row["isACPlugged"] as Bool)
+                    // Compared one column at a time: a single chained expression
+                    // exceeds the type checker's time limit on newer Swift compilers.
+                    let doublesEqual = ["levelPercent", "temperatureC"].allSatisfy { column in
+                        (existing[column] as Double?) == (row[column] as Double?)
+                    }
+                    let intsEqual = ["capacityMAh", "designMAh", "cycleCount", "voltageMV", "amperageMA", "timeRemainingMin"].allSatisfy { column in
+                        (existing[column] as Int?) == (row[column] as Int?)
+                    }
+                    let boolsEqual = ["isCharging", "isACPlugged"].allSatisfy { column in
+                        (existing[column] as Bool) == (row[column] as Bool)
+                    }
+                    let equal = doublesEqual && intsEqual && boolsEqual
                     guard equal else { throw LegacyImportError.verificationFailed("Battery payload conflicts at timestamp \(timestamp).") }
                 }
                 try db.execute(sql: """
