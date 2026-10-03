@@ -109,8 +109,11 @@ public actor SamplingCoordinator {
         guard emit else { return 0 }
         do {
             let apps = result.samples.map { sample in
-                let identity = AppIdentity.resolve(bundleIdentifier: sample.bundleIdentifier,
-                                                   processName: sample.processName, path: sample.path)
+                let identity = result.identitiesByPID[sample.pid] ?? AppIdentity.resolve(
+                    bundleIdentifier: sample.bundleIdentifier,
+                    processName: sample.processName,
+                    path: sample.path
+                )
                 return SampledApp(
                     groupKey: identity.groupKey,
                     bundleIdentifier: sample.bundleIdentifier,

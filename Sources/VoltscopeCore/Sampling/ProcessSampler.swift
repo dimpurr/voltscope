@@ -13,6 +13,9 @@ public struct ProcessSampleResult: Sendable {
     public let visibleCount: Int
     /// Number of processes skipped because proc_pid_rusage returned EPERM.
     public let unreadableCount: Int
+    /// Resolved identities for this tick, keyed by PID. Metadata is cached by
+    /// PID and process start time before this lightweight lookup is produced.
+    public let identitiesByPID: [Int32: AppIdentity.Resolved]
 }
 
 public struct ProcessSnapshot: Sendable, Equatable {
@@ -41,6 +44,45 @@ public final class ProcessSampler: @unchecked Sendable {
         let pid: Int32
         let startAbstime: UInt64
     }
+
+    struct MetadataKey: Hashable {
+        let pid: Int32
+        let startAbstime: UInt64
+    }
+
+    struct ProcessMetadata: Equatable {
+        let name: String
+        let path: String?
+        let bundleId: String?
+        let parentPid: Int32?
+        let resolvedIdentity: AppIdentity.Resolved
+    }
+
+    struct MetadataCache<Key: Hashable, Value> {
+        private(set) var values: [Key: Value] = [:]
+        private var insertionOrder: [Key] = []
+        let capacity: Int
+
+        init(capacity: Int = 4_096) { self.capacity = max(0, capacity) }
+
+        func value(for key: Key) -> Value? { values[key] }
+
+        mutating func insert(_ value: Value, for key: Key) {
+            guard capacity > 0 else { return }
+            if values[key] == nil { insertionOrder.append(key) }
+            values[key] = value
+            while insertionOrder.count > capacity {
+                values.removeValue(forKey: insertionOrder.removeFirst())
+            }
+        }
+
+        mutating func retain(_ activeKeys: Set<Key>) {
+            values = values.filter { activeKeys.contains($0.key) }
+            insertionOrder.removeAll { !activeKeys.contains($0) }
+        }
+    }
+
+    private var metadataCache = MetadataCache<MetadataKey, ProcessMetadata>()
 
     private var previous: [ProcessKey: ProcessSnapshot] = [:]
     private let queue = DispatchQueue(label: "com.dimpurr.voltscope.processsampler")
@@ -92,6 +134,8 @@ public final class ProcessSampler: @unchecked Sendable {
 
             var output: [EnergySample] = []
             output.reserveCapacity(snapshots.count)
+            var identitiesByPID: [Int32: AppIdentity.Resolved] = [:]
+            identitiesByPID.reserveCapacity(min(snapshots.count, 512))
 
             var nextPrevious: [ProcessKey: ProcessSnapshot] = [:]
             nextPrevious.reserveCapacity(snapshots.count)
@@ -114,14 +158,21 @@ public final class ProcessSampler: @unchecked Sendable {
                     energyAvailable: energyAvailable
                 ) {
                     output.append(row)
+                    let metadataKey = MetadataKey(pid: snap.pid, startAbstime: snap.procStartAbstime)
+                    identitiesByPID[snap.pid] = metadataCache.value(for: metadataKey)?.resolvedIdentity
                 }
             }
 
             previous = nextPrevious
+            let activeMetadataKeys = Set(snapshots.map {
+                MetadataKey(pid: $0.pid, startAbstime: $0.procStartAbstime)
+            })
+            metadataCache.retain(activeMetadataKeys)
             return ProcessSampleResult(
                 samples: output,
                 visibleCount: snapshots.count,
-                unreadableCount: unreadableCount
+                unreadableCount: unreadableCount,
+                identitiesByPID: identitiesByPID
             )
         }
     }
@@ -241,9 +292,21 @@ public final class ProcessSampler: @unchecked Sendable {
             return nil
         }
 
-        let identity = resolveIdentity(pid: pid)
-        let ppidRaw = voltscope_get_parent_pid(pid)
-        let parentPid: Int32? = ppidRaw > 0 ? Int32(ppidRaw) : nil
+        let metadataKey = MetadataKey(pid: Int32(pid), startAbstime: info.ri_proc_start_abstime)
+        let metadata: ProcessMetadata
+        if let cached = metadataCache.value(for: metadataKey) {
+            metadata = cached
+        } else {
+            let ppidRaw = voltscope_get_parent_pid(pid)
+            let parentPid: Int32? = ppidRaw > 0 ? Int32(ppidRaw) : nil
+            let identity = resolveIdentity(pid: pid)
+            let resolvedIdentity = AppIdentity.resolve(bundleIdentifier: identity.bundleId,
+                                                       processName: identity.name, path: identity.path)
+            metadata = ProcessMetadata(name: identity.name, path: identity.path,
+                                       bundleId: identity.bundleId, parentPid: parentPid,
+                                       resolvedIdentity: resolvedIdentity)
+            metadataCache.insert(metadata, for: metadataKey)
+        }
 
         // ri_user_time and ri_system_time are in mach absolute time units.
         // Multiply by timebaseNumer/timebaseDenom to convert to nanoseconds.
@@ -254,10 +317,10 @@ public final class ProcessSampler: @unchecked Sendable {
 
         return ProcessSnapshot(
             pid: pid,
-            parentPid: parentPid,
-            bundleIdentifier: identity.bundleId,
-            processName: identity.name,
-            path: identity.path,
+            parentPid: metadata.parentPid,
+            bundleIdentifier: metadata.bundleId,
+            processName: metadata.name,
+            path: metadata.path,
             cpuUserNs: cpuUserNs,
             cpuSystemNs: cpuSystemNs,
             energyTotal: Self.energyTotal(from: info),

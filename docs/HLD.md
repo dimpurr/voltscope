@@ -214,7 +214,10 @@ Populated only when helper is installed. Contains powermetrics-derived joule rat
 1. Run the process scan and independent IOReport bucket scan. The process scan
    calls `proc_listallpids`, reads accessible processes through
    `proc_pid_rusage(RUSAGE_INFO_V6)`, and counts permission-denied processes.
-2. Resolve app identity, convert CPU counters from Mach timebase ticks to
+   Path, bundle, process-name, parent-PID, and resolved app-identity metadata is
+   cached by `(pid, ri_proc_start_abstime)`, capped at 4,096 entries, and pruned
+   for processes that are no longer readable in the current scan.
+2. Reuse cached app identity, convert CPU counters from Mach timebase ticks to
    nanoseconds, and calculate `ri_energy_nj` deltas. First observations establish
    baselines; rows without energy are retained only when CPU energy is
    unavailable and CPU time moved.

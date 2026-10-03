@@ -103,6 +103,76 @@ final class BatteryConditionTests: XCTestCase {
 }
 
 final class ProcessSamplerTests: XCTestCase {
+    func testMetadataCacheSeparatesPIDReuseAndPrunesExitedProcesses() {
+        typealias Cache = ProcessSampler.MetadataCache<ProcessSampler.MetadataKey, ProcessSampler.ProcessMetadata>
+        let firstKey = ProcessSampler.MetadataKey(pid: 42, startAbstime: 100)
+        let reusedKey = ProcessSampler.MetadataKey(pid: 42, startAbstime: 200)
+        let first = ProcessSampler.ProcessMetadata(
+            name: "tool-1.0", path: "/opt/tool/versions/1.0", bundleId: nil, parentPid: 7,
+            resolvedIdentity: AppIdentity.resolve(bundleIdentifier: nil, processName: "tool-1.0",
+                                                  path: "/opt/tool/versions/1.0")
+        )
+        let reused = ProcessSampler.ProcessMetadata(
+            name: "tool-2.0", path: "/opt/tool/versions/2.0", bundleId: nil, parentPid: 9,
+            resolvedIdentity: AppIdentity.resolve(bundleIdentifier: nil, processName: "tool-2.0",
+                                                  path: "/opt/tool/versions/2.0")
+        )
+        var cache = Cache(capacity: 4)
+        cache.insert(first, for: firstKey)
+        cache.insert(reused, for: reusedKey)
+
+        XCTAssertEqual(cache.value(for: firstKey), first)
+        XCTAssertEqual(cache.value(for: reusedKey), reused)
+        XCTAssertNil(cache.value(for: ProcessSampler.MetadataKey(pid: 42, startAbstime: 300)))
+
+        cache.retain([reusedKey])
+        XCTAssertNil(cache.value(for: firstKey), "exited process metadata must be pruned")
+        XCTAssertEqual(cache.value(for: reusedKey), reused)
+
+        var bounded = Cache(capacity: 1)
+        bounded.insert(first, for: firstKey)
+        bounded.insert(reused, for: reusedKey)
+        XCTAssertEqual(bounded.values.count, 1, "metadata cache must respect its capacity")
+        XCTAssertNil(bounded.value(for: firstKey))
+        XCTAssertEqual(bounded.value(for: reusedKey), reused)
+    }
+
+    func testCachedMetadataPreservesEveryResolvedIdentityField() {
+        let name = "2.1.287"
+        let path = "/Users/example/.local/share/claude/versions/2.1.287"
+        let uncached = AppIdentity.resolve(bundleIdentifier: nil, processName: name, path: path)
+        let metadata = ProcessSampler.ProcessMetadata(name: name, path: path, bundleId: nil, parentPid: 11,
+                                                      resolvedIdentity: uncached)
+        let fromCache = metadata.resolvedIdentity
+        XCTAssertEqual(fromCache.groupKey, uncached.groupKey)
+        XCTAssertEqual(fromCache.displayName, uncached.displayName)
+        XCTAssertEqual(metadata.name, name)
+        XCTAssertEqual(metadata.path, path)
+        XCTAssertEqual(metadata.bundleId, nil)
+        XCTAssertEqual(metadata.parentPid, 11)
+
+        func snapshot(_ currentEnergy: UInt64, metadata: ProcessSampler.ProcessMetadata) -> ProcessSnapshot {
+            ProcessSnapshot(pid: 77, parentPid: metadata.parentPid, bundleIdentifier: metadata.bundleId,
+                            processName: metadata.name, path: metadata.path,
+                            cpuUserNs: 200, cpuSystemNs: 100, energyTotal: currentEnergy,
+                            wakeupsTotal: 4, diskReadTotal: 20, diskWriteTotal: 30,
+                            procStartAbstime: 500)
+        }
+        let prior = snapshot(10, metadata: metadata)
+        let cachedResult = ProcessSampler.deltaSample(from: prior, to: snapshot(25, metadata: metadata),
+                                                     timestamp: 1_700_000_000_000, year: 2026,
+                                                     month: 10, day: 3, hour: 20, minute: 0)
+        let uncachedMetadata = ProcessSampler.ProcessMetadata(
+            name: name, path: path, bundleId: nil, parentPid: 11,
+            resolvedIdentity: AppIdentity.resolve(bundleIdentifier: nil, processName: name, path: path)
+        )
+        let uncachedResult = ProcessSampler.deltaSample(from: snapshot(10, metadata: uncachedMetadata),
+                                                        to: snapshot(25, metadata: uncachedMetadata),
+                                                        timestamp: 1_700_000_000_000, year: 2026,
+                                                        month: 10, day: 3, hour: 20, minute: 0)
+        XCTAssertEqual(cachedResult, uncachedResult, "cached and uncached sample rows must match field for field")
+    }
+
     func testFirstTickEstablishesBaselineEmits() {
         let sampler = ProcessSampler()
         let first = sampler.sampleAll()

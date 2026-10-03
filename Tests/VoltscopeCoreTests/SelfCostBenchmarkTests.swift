@@ -6,6 +6,27 @@ import XCTest
 /// Opt-in microbenchmarks for the routine 330-process flush and seven-day chart query.
 /// Run with VOLTSCOPE_SELF_COST_BENCHMARK=1 swift test --disable-keychain --filter SelfCostBenchmarkTests.
 final class SelfCostBenchmarkTests: XCTestCase {
+    func testLiveProcessSamplerTick() throws {
+        guard ProcessInfo.processInfo.environment["VOLTSCOPE_SELF_COST_BENCHMARK"] == "1" else {
+            throw XCTSkip("Set VOLTSCOPE_SELF_COST_BENCHMARK=1 to run the self-cost microbenchmark")
+        }
+
+        let sampler = ProcessSampler()
+        _ = sampler.sampleAll() // warm caches and establish the counter baseline
+        var samples: [Double] = []
+        var processCounts: [Int] = []
+        for _ in 0..<7 {
+            let start = DispatchTime.now().uptimeNanoseconds
+            let result = sampler.sampleAll()
+            samples.append(Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+            processCounts.append(result.visibleCount + result.unreadableCount)
+        }
+        let sorted = samples.sorted()
+        print(String(format: "SELF_COST_BENCHMARK liveTick_ms median=%.3f visiblePlusUnreadable=%@ samples=%@",
+                     sorted[sorted.count / 2], processCounts.map(String.init).joined(separator: ","),
+                     samples.map { String(format: "%.3f", $0) }.joined(separator: ",")))
+    }
+
     func testFlush330ProcessesAndSevenDayQuery() async throws {
         guard ProcessInfo.processInfo.environment["VOLTSCOPE_SELF_COST_BENCHMARK"] == "1" else {
             throw XCTSkip("Set VOLTSCOPE_SELF_COST_BENCHMARK=1 to run the self-cost microbenchmark")
