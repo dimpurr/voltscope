@@ -59,6 +59,22 @@ private final class LockedFlag: @unchecked Sendable {
     }
 }
 
+private final class ImportTestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Date
+
+    init(_ value: Date) { self.value = value }
+
+    func now() -> Date {
+        lock.lock(); defer { lock.unlock() }
+        return value
+    }
+
+    func advance(by interval: TimeInterval) {
+        lock.lock(); value.addTimeInterval(interval); lock.unlock()
+    }
+}
+
 /// Commits positive-energy rows into a legacy WAL database from a separate
 /// connection and truncates the WAL after each commit, mimicking an old
 /// process that is still running while the import reads the file.
@@ -167,6 +183,11 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         }
     }
 
+    private func legacyFixtureNow(days: Int) -> Date {
+        let latestTimestamp = Int64(1_700_000_000_000) + Int64(days - 1) * 86_400_000 + 12 * 3_600_000 + 3_000
+        return Date(timeIntervalSince1970: Double(latestTimestamp) / 1000)
+    }
+
     private func makeHistory() throws -> HistoryDatabase {
         let db = try HistoryDatabase.makeTemporaryFile()
         if let url = db.fileURL { directories.append(url.deletingLastPathComponent()) }
@@ -188,7 +209,8 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         let legacyURL = dir.appendingPathComponent("db.sqlite")
         try makeLegacy(at: legacyURL, days: 32)
         let history = try makeHistory()
-        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 125, denom: 3), rawRetentionDays: 7)
+        let fixtureNow = legacyFixtureNow(days: 32)
+        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 125, denom: 3), now: { fixtureNow }, rawRetentionDays: 7)
 
         try await importer.start().value
 
@@ -280,7 +302,7 @@ final class LegacyDatabaseImporterTests: XCTestCase {
             (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0"),
              try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppUsageMinute WHERE metricVersion=0"))
         }
-        XCTAssertEqual(resumedCounts.0, 6)
+        XCTAssertEqual(resumedCounts.0, 2, "rows committed before the retention window moved remain until maintenance prunes them")
         XCTAssertEqual(resumedCounts.1, 6)
     }
 
@@ -434,7 +456,8 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         try makeLegacy(at: legacyURL, days: 8)
         let history = try makeHistory()
         let overlap = RunOverlapRecorder()
-        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1), progress: { _ in
+        let fixtureNow = legacyFixtureNow(days: 8)
+        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1), now: { fixtureNow }, progress: { _ in
             overlap.recordOverlap()
         })
         async let first: Void = importer.run()
@@ -457,7 +480,8 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         let legacyURL = dir.appendingPathComponent("db.sqlite")
         try makeLegacy(at: legacyURL, days: 1)
         let history = try makeHistory()
-        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1))
+        let fixtureNow = legacyFixtureNow(days: 1)
+        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1), now: { fixtureNow })
         try await importer.run()
         let cursor = try await history.dbPool.read { db in try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key='legacy.cursorHour'")! }
         try await history.dbPool.write { db in
@@ -515,8 +539,10 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         let late = LegacyLateWriter(writer: walWriter, base: lastFixtureTimestamp)
         let history = try makeHistory()
         let fired = LockedFlag()
+        let fixtureNow = legacyFixtureNow(days: 3)
         let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
                                               timebase: LegacyTimebase(numer: 1, denom: 1),
+                                              now: { fixtureNow },
                                               progress: { progress in
             guard progress.importedHours == 1, fired.trySet() else { return }
             late.commitNextHour(energyNJ: 1_001)
@@ -698,9 +724,11 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         let maxTimestamp = base + day + 12 * hour + 3_000
         let boundaryHour = maxTimestamp / hour
         let history = try makeHistory()
+        let fixtureNow = legacyFixtureNow(days: 2)
         let box = ImportTaskBox()
         let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
                                               timebase: LegacyTimebase(numer: 1, denom: 1),
+                                              now: { fixtureNow },
                                               progress: { progress in
             if progress.importedHours == progress.totalHours { box.cancel() }
         })
@@ -725,7 +753,8 @@ final class LegacyDatabaseImporterTests: XCTestCase {
             try Self.insertEnergy(db, timestamp: newTimestamp, energyNJ: 500)
         }
         try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
-                                         timebase: LegacyTimebase(numer: 1, denom: 1)).run()
+                                         timebase: LegacyTimebase(numer: 1, denom: 1),
+                                         now: { fixtureNow }).run()
         let result = try await history.dbPool.read { db -> (String, Int64, Int) in
             (
                 try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'") ?? "",
@@ -847,6 +876,80 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         let resumedRows = try await tierRows(resumed)
         let completeRows = try await tierRows(complete)
         XCTAssertEqual(resumedRows, completeRows)
+    }
+
+    func testInterruptedImportResumesAfterMaintenanceAdvancesRawRetentionWindow() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 9)
+        let history = try makeHistory()
+        let anchorMilliseconds: Int64 = 1_700_000_000_000 + 8 * 86_400_000 + 12 * 3_600_000
+        let anchor = Date(timeIntervalSince1970: Double(anchorMilliseconds) / 1000)
+        let clock = ImportTestClock(anchor)
+        let box = ImportTaskBox()
+        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                              timebase: LegacyTimebase(numer: 1, denom: 1),
+                                              now: { clock.now() }, rawRetentionDays: 7,
+                                              progress: { progress in
+            if progress.importedHours == progress.totalHours { box.cancel() }
+        })
+        let task = importer.start()
+        box.set(task)
+        do {
+            try await task.value
+            XCTFail("cancellation after all import hours should interrupt before verification completes")
+        } catch is CancellationError {
+            // All source hours and the resumable cursor have committed.
+        }
+
+        clock.advance(by: 3 * 60 * 60)
+        try await history.runMaintenance(now: clock.now())
+        let retainedAfterMaintenance = try await history.dbPool.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0") ?? 0
+        }
+        XCTAssertEqual(retainedAfterMaintenance, 14, "maintenance should prune the source day's raw rows that fell outside the moving cutoff")
+        // This is the persisted state produced by the affected candidate when
+        // it attempts verification after the retention window has moved.
+        try await history.dbPool.write { db in
+            try db.execute(sql: "UPDATE Meta SET value='failed' WHERE key='legacy.state'")
+            try db.execute(sql: "INSERT INTO Meta(key, value) VALUES ('legacy.error', 'Raw metricVersion 0 energy totals do not match the legacy retention window.') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        }
+
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                         timebase: LegacyTimebase(numer: 1, denom: 1),
+                                         now: { clock.now() }, rawRetentionDays: 7).run()
+        let result = try await history.dbPool.read { db in
+            (try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'") ?? "",
+             try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.error'"))
+        }
+        XCTAssertEqual(result.0, "done")
+        XCTAssertNil(result.1)
+    }
+
+    func testMissingRawRowStillFailsVerificationInsideCurrentRetentionWindow() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 9)
+        let history = try makeHistory()
+        let anchorMilliseconds: Int64 = 1_700_000_000_000 + 8 * 86_400_000 + 12 * 3_600_000
+        let anchor = Date(timeIntervalSince1970: Double(anchorMilliseconds) / 1000)
+        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                              timebase: LegacyTimebase(numer: 1, denom: 1),
+                                              now: { anchor }, rawRetentionDays: 7)
+        try await importer.start().value
+        try await history.dbPool.write { db in
+            try db.execute(sql: "DELETE FROM AppSampleRaw WHERE metricVersion=0 AND ts=(SELECT MIN(ts) FROM AppSampleRaw WHERE metricVersion=0)")
+            try db.execute(sql: "UPDATE Meta SET value='failed' WHERE key='legacy.state'")
+        }
+
+        do {
+            try await importer.run()
+            XCTFail("a missing raw row that remains in the current retention window must fail verification")
+        } catch let error as LegacyImportError {
+            guard case .verificationFailed = error else { return XCTFail("unexpected error: \(error)") }
+        }
+        let state = try await history.dbPool.read { db in try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'") }
+        XCTAssertEqual(state, "failed")
     }
 
     func testRepeatedRunIsIdempotent() async throws {

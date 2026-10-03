@@ -241,7 +241,10 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
                 try await setMeta("legacy.windowAnchor", value: String(anchor!))
             }
             let minuteCutoff = anchor! - 30 * 86_400_000
-            let rawCutoff = anchor! - Int64(rawRetentionDays) * 86_400_000
+            let anchoredRawCutoff = anchor! - Int64(rawRetentionDays) * 86_400_000
+            let maintenanceRawCutoff = Int64(now().timeIntervalSince1970 * 1000)
+                - Int64(rawRetentionDays) * 86_400_000
+            let rawCutoff = max(anchoredRawCutoff, maintenanceRawCutoff)
             // Every source read for this pass is bounded by the snapshot so
             // the destination can be verified against exactly what was read.
             let snapshotUpper = bounds.latestTimestamp &+ 1
@@ -292,7 +295,9 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
                 try Self.readVerificationTotals(src, rawCutoff: rawCutoff, upperBound: snapshotUpper)
             }
             do {
-                try await history.dbPool.read { dst in try Self.verify(oldTotals, upperBound: snapshotUpper, dst) }
+                try await history.dbPool.read { dst in
+                    try Self.verify(oldTotals, rawCutoff: rawCutoff, upperBound: snapshotUpper, dst)
+                }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -537,7 +542,8 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         )
     }
 
-    private static func verify(_ oldTotals: VerificationTotals, upperBound: Int64, _ dst: Database) throws {
+    private static func verify(_ oldTotals: VerificationTotals, rawCutoff: Int64,
+                               upperBound: Int64, _ dst: Database) throws {
         let newApps = try Row.fetchAll(dst, sql: "SELECT a.groupKey, SUM(h.energyNJ) AS energy FROM AppUsageHour h JOIN App a ON a.id=h.appId WHERE h.metricVersion=0 GROUP BY a.groupKey")
         let newAppTotals = Dictionary(uniqueKeysWithValues: newApps.compactMap { row -> (String, Int64)? in
             guard let key: String = row["groupKey"], let value: Int64 = row["energy"] else { return nil }; return (key, value)
@@ -553,8 +559,8 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         if batteryOld != batteryNew { throw LegacyImportError.verificationFailed("Battery row count differs (legacy \(batteryOld), new \(batteryNew)).") }
         let eventNew = try Int.fetchOne(dst, sql: "SELECT COUNT(*) FROM PowerEvents WHERE timestamp < ?", arguments: [upperBound]) ?? 0
         if oldTotals.eventCount != eventNew { throw LegacyImportError.verificationFailed("Power event row count differs (legacy \(oldTotals.eventCount), new \(eventNew)).") }
-        let appRaw = try Int64.fetchOne(dst, sql: "SELECT COALESCE(SUM(energyNJ), 0) FROM AppSampleRaw WHERE metricVersion=0") ?? 0
-        let bucketRaw = try Int64.fetchOne(dst, sql: "SELECT COALESCE(SUM(energyNJ), 0) FROM BucketSampleRaw WHERE metricVersion=0") ?? 0
+        let appRaw = try Int64.fetchOne(dst, sql: "SELECT COALESCE(SUM(energyNJ), 0) FROM AppSampleRaw WHERE metricVersion=0 AND ts >= ? AND ts < ?", arguments: [rawCutoff, upperBound]) ?? 0
+        let bucketRaw = try Int64.fetchOne(dst, sql: "SELECT COALESCE(SUM(energyNJ), 0) FROM BucketSampleRaw WHERE metricVersion=0 AND ts >= ? AND ts < ?", arguments: [rawCutoff, upperBound]) ?? 0
         if oldTotals.rawAppEnergy != appRaw || oldTotals.rawBucketEnergy != bucketRaw {
             throw LegacyImportError.verificationFailed("Raw metricVersion 0 energy totals do not match the legacy retention window.")
         }
