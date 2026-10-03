@@ -122,6 +122,7 @@ final class ProcessSamplerTests: XCTestCase {
         pid: Int32 = 4321,
         start: UInt64 = 1_000,
         energy: UInt64,
+        bundleIdentifier: String = "com.example.test",
         cpuUser: UInt64 = 0,
         cpuSystem: UInt64 = 0,
         wakeups: UInt64 = 0,
@@ -131,7 +132,7 @@ final class ProcessSamplerTests: XCTestCase {
         ProcessSnapshot(
             pid: pid,
             parentPid: 1,
-            bundleIdentifier: "com.example.test",
+            bundleIdentifier: bundleIdentifier,
             processName: "TestProc",
             path: "/usr/bin/test",
             cpuUserNs: cpuUser,
@@ -144,7 +145,7 @@ final class ProcessSamplerTests: XCTestCase {
         )
     }
 
-    private func delta(_ prior: ProcessSnapshot?, _ current: ProcessSnapshot) -> EnergySample? {
+    private func delta(_ prior: ProcessSnapshot?, _ current: ProcessSnapshot, energyAvailable: Bool = true) -> EnergySample? {
         ProcessSampler.deltaSample(
             from: prior,
             to: current,
@@ -153,7 +154,8 @@ final class ProcessSamplerTests: XCTestCase {
             month: 10,
             day: 2,
             hour: 12,
-            minute: 0
+            minute: 0,
+            energyAvailable: energyAvailable
         )
     }
 
@@ -162,6 +164,55 @@ final class ProcessSamplerTests: XCTestCase {
         let current = snapshot(energy: 5_000, cpuUser: 3_100, cpuSystem: 2_050)
         // CPU time advanced, but no new energy was billed: no row.
         XCTAssertNil(delta(prior, current))
+    }
+
+    func testUnavailableEnergyRetainsCPUWorkThroughRollupsAndHistoryOrdering() async throws {
+        let prior = snapshot(energy: 5_000, cpuUser: 100, cpuSystem: 50)
+        let busy = delta(prior, snapshot(energy: 5_000, cpuUser: 3_100, cpuSystem: 2_050), energyAvailable: false)
+        let light = delta(prior, snapshot(pid: 4322, start: 1_001, energy: 5_000,
+                                          bundleIdentifier: "com.example.light", cpuUser: 1_100, cpuSystem: 550), energyAvailable: false)
+        XCTAssertEqual(busy?.energyNJ, 0)
+        XCTAssertEqual(busy?.cpuUserNs, 3_000)
+        XCTAssertEqual(busy?.cpuSystemNs, 2_000)
+        XCTAssertEqual(light?.energyNJ, 0)
+        XCTAssertEqual(light?.cpuUserNs, 1_000)
+        XCTAssertEqual(light?.cpuSystemNs, 500)
+
+        let db = try HistoryDatabase.makeInMemory()
+        let now = Date()
+        let nowMinute = Int64(now.timeIntervalSince1970 / 60)
+        let timestamp = (nowMinute - 180) * 60_000
+        let samples = [busy, light].compactMap { $0 }
+        try await db.writeTick(timestamp: timestamp, apps: samples.map { sample in
+            SampledApp(groupKey: sample.bundleIdentifier ?? sample.processName,
+                       bundleIdentifier: sample.bundleIdentifier, displayName: sample.processName,
+                       path: sample.path, pid: sample.pid, parentPid: sample.parentPid,
+                       energyNJ: sample.energyNJ, cpuNs: sample.cpuUserNs + sample.cpuSystemNs,
+                       wakeups: sample.wakeups, diskReadBytes: sample.diskReadBytes,
+                       diskWriteBytes: sample.diskWriteBytes)
+        }, buckets: [], coverage: SampleCoverage(visible: 2, unreadable: 0), energyUnavailable: true)
+
+        let raw = try await db.dbPool.read { conn in
+            try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE energyNJ=0 AND cpuNs>0") ?? 0
+        }
+        XCTAssertEqual(raw, 2)
+
+        try await db.runMaintenance(now: now)
+        let rollups = try await db.dbPool.read { conn in
+            (
+                try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppUsageMinute WHERE energyNJ=0 AND cpuNs>0") ?? 0,
+                try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppUsageHour WHERE energyNJ=0 AND cpuNs>0") ?? 0
+            )
+        }
+        XCTAssertEqual(rollups.0, 2)
+        XCTAssertEqual(rollups.1, 2)
+
+        let hourStart = timestamp / 3_600_000 * 3_600_000
+        let interval = DateInterval(start: Date(timeIntervalSince1970: Double(hourStart) / 1000),
+                                    end: Date(timeIntervalSince1970: Double(hourStart + 3_600_000) / 1000))
+        let rows = try await db.historyAppBreakdown(in: interval, range: .d7, energyAvailable: false)
+        XCTAssertEqual(rows.map(\.totalCPUNS), [5_000, 1_500])
+        XCTAssertTrue(rows.allSatisfy { $0.totalEnergyNJ == 0 })
     }
 
     func testPositiveEnergyDeltaEmitsRowWithCorrectDeltas() {

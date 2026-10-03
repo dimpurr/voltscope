@@ -308,6 +308,46 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         }
     }
 
+    func testMatchingSamplerRowsAtLegacyTimestampsAreReplayedFromSnapshot() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        let history = try makeHistory()
+        try await history.dbPool.write { db in
+            try BatterySnapshot(timestamp: 1_700_043_200_000, levelPercent: 80, capacityMAh: 4000,
+                                designMAh: 5000, cycleCount: 100, voltageMV: 12000,
+                                amperageMA: -500, temperatureC: 30, timeRemainingMin: 90,
+                                isCharging: false, isACPlugged: true).insert(db)
+            try PowerEvent(timestamp: 1_700_043_200_000, eventType: .wake,
+                           durationSeconds: 2, metadata: "fixture").insert(db)
+            try db.execute(sql: "CREATE TABLE CopyAudit(tableName TEXT NOT NULL)")
+            try db.execute(sql: """
+                CREATE TRIGGER audit_battery_copy AFTER INSERT ON BatteryStatus
+                WHEN NEW.timestamp = 1700043200000
+                BEGIN INSERT INTO CopyAudit(tableName) VALUES ('BatteryStatus'); END
+                """)
+            try db.execute(sql: """
+                CREATE TRIGGER audit_event_copy AFTER INSERT ON PowerEvents
+                WHEN NEW.timestamp = 1700043200000
+                BEGIN INSERT INTO CopyAudit(tableName) VALUES ('PowerEvents'); END
+                """)
+        }
+
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                         timebase: LegacyTimebase(numer: 1, denom: 1)).run()
+
+        let result = try await history.dbPool.read { db in
+            (
+                try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'"),
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM CopyAudit WHERE tableName='BatteryStatus'"),
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM CopyAudit WHERE tableName='PowerEvents'")
+            )
+        }
+        XCTAssertEqual(result.0, "done")
+        XCTAssertEqual(result.1, 1)
+        XCTAssertEqual(result.2, 1)
+    }
+
     func testUnexpectedExtraPowerEventFailsCountVerification() async throws {
         let dir = try directory()
         let legacyURL = dir.appendingPathComponent("db.sqlite")
@@ -322,6 +362,70 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         } catch let error as LegacyImportError {
             guard case .verificationFailed = error else { return XCTFail("unexpected error: \(error)") }
         }
+    }
+
+    func testConcurrentPostSnapshotBatteryAndEventRowsDoNotFailImportAndFailedStateRetries() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 3)
+        let history = try makeHistory()
+        let lateTimestamp: Int64 = 1_700_000_000_000 + Int64(2) * 86_400_000 + Int64(12) * 3_600_000 + 5_000
+        // Model an earlier failed launch. The next run must take the failed -> pending path.
+        try await history.dbPool.write { db in
+            try db.execute(sql: "INSERT INTO Meta(key, value) VALUES ('legacy.state', 'failed')")
+            try db.execute(sql: "INSERT INTO Meta(key, value) VALUES ('legacy.error', 'previous verification failure')")
+        }
+        let wroteSamplerRows = LockedFlag()
+        let samplerWriteFinished = DispatchSemaphore(value: 0)
+        let importer = LegacyDatabaseImporter(
+            history: history,
+            legacyURL: legacyURL,
+            timebase: LegacyTimebase(numer: 1, denom: 1),
+            progress: { _ in
+                guard wroteSamplerRows.trySet() else { return }
+                // The source snapshot ends at the final legacy timestamp; these
+                // sampler writes happen after that snapshot while import is active,
+                // on a separate task and writer transaction.
+                Task.detached {
+                    defer { samplerWriteFinished.signal() }
+                    do {
+                        try await history.writeBatterySnapshot(BatterySnapshot(
+                            timestamp: lateTimestamp, levelPercent: 79, capacityMAh: 3990,
+                            designMAh: 5000, cycleCount: 100, voltageMV: 12000,
+                            amperageMA: -400, temperatureC: 30, timeRemainingMin: 90,
+                            isCharging: false, isACPlugged: true
+                        ))
+                        try await history.writePowerEvent(PowerEvent(
+                            timestamp: lateTimestamp + 1, eventType: .plug,
+                            durationSeconds: nil, metadata: nil
+                        ))
+                    } catch {
+                        // The final row-count assertions fail if either write is missing.
+                    }
+                }
+                samplerWriteFinished.wait()
+            }
+        )
+
+        try await importer.run()
+
+        let result = try await history.dbPool.read { db in
+            (
+                try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'"),
+                try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.error'"),
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM BatteryStatus"),
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM PowerEvents"),
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM BatteryStatus WHERE timestamp < ?", arguments: [lateTimestamp]),
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM PowerEvents WHERE timestamp < ?", arguments: [lateTimestamp])
+            )
+        }
+        XCTAssertTrue(wroteSamplerRows.trySet() == false, "the importer should have written concurrent sampler rows")
+        XCTAssertEqual(result.0, "done")
+        XCTAssertNil(result.1)
+        XCTAssertEqual(result.2, 4)
+        XCTAssertEqual(result.3, 4)
+        XCTAssertEqual(result.4, 3)
+        XCTAssertEqual(result.5, 3)
     }
 
     func testConcurrentRunsAreSingleFlightAndKeepRawRowsUniqueByReplay() async throws {

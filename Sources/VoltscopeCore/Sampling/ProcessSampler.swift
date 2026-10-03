@@ -110,7 +110,8 @@ public final class ProcessSampler: @unchecked Sendable {
                     month: month,
                     day: day,
                     hour: hour,
-                    minute: minute
+                    minute: minute,
+                    energyAvailable: energyAvailable
                 ) {
                     output.append(row)
                 }
@@ -127,20 +128,21 @@ public final class ProcessSampler: @unchecked Sendable {
 
     /// Pure delta rule for one process between two consecutive snapshots.
     ///
-    /// Returns `nil` when the interval reports no new CPU energy for the process.
+    /// Returns `nil` when the interval reports no measurable activity for the process.
     /// `ri_energy_nj` is cumulative hardware-estimated energy, so
     /// most of the 300–500 processes in the roster report an unchanged
     /// cumulative counter on any given tick. Emitting those rows produced the
     /// overwhelming majority of historical storage growth while contributing
     /// nothing to the energy-based History queries, which sum energy or filter
-    /// with `energy > 0`.
+    /// with `energy > 0`. On platforms without this counter, CPU time is the
+    /// activity signal and CPU-active rows are retained with zero energy.
     ///
     /// `prior == nil` is the first-sighting case: the process has no baseline
     /// yet, so nothing is emitted and the caller only records the snapshot.
     /// A regressed counter (`current < previous`, e.g. after PID reuse) is
     /// clamped to a zero delta and therefore also yields `nil`; the caller still
-    /// advances its baseline. CPU, wakeup, and disk deltas are reported only on
-    /// rows that carry energy, and no other field's meaning changes.
+    /// advances its baseline. CPU, wakeup, and disk deltas are reported on
+    /// retained rows.
     static func deltaSample(
         from prior: ProcessSnapshot?,
         to current: ProcessSnapshot,
@@ -149,19 +151,19 @@ public final class ProcessSampler: @unchecked Sendable {
         month: Int,
         day: Int,
         hour: Int,
-        minute: Int
+        minute: Int,
+        energyAvailable: Bool = true
     ) -> EnergySample? {
         guard let prior else { return nil }
 
         let energyDelta = saturatingDelta(current.energyTotal, prior.energyTotal)
-        guard energyDelta > 0 else { return nil }
-
         // Compute non-negative deltas; counters are monotonic but we clamp defensively.
         let wakeupsDelta = saturatingDelta(current.wakeupsTotal, prior.wakeupsTotal)
         let diskReadDelta = saturatingDelta(current.diskReadTotal, prior.diskReadTotal)
         let diskWriteDelta = saturatingDelta(current.diskWriteTotal, prior.diskWriteTotal)
         let cpuUserDelta = saturatingDelta(current.cpuUserNs, prior.cpuUserNs)
         let cpuSystemDelta = saturatingDelta(current.cpuSystemNs, prior.cpuSystemNs)
+        guard energyAvailable ? energyDelta > 0 : (cpuUserDelta > 0 || cpuSystemDelta > 0) else { return nil }
 
         return EnergySample(
             timestamp: timestamp,

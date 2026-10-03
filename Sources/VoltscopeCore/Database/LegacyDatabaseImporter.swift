@@ -292,7 +292,7 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
                 try Self.readVerificationTotals(src, rawCutoff: rawCutoff, upperBound: snapshotUpper)
             }
             do {
-                try await history.dbPool.read { dst in try Self.verify(oldTotals, dst) }
+                try await history.dbPool.read { dst in try Self.verify(oldTotals, upperBound: snapshotUpper, dst) }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -537,7 +537,7 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         )
     }
 
-    private static func verify(_ oldTotals: VerificationTotals, _ dst: Database) throws {
+    private static func verify(_ oldTotals: VerificationTotals, upperBound: Int64, _ dst: Database) throws {
         let newApps = try Row.fetchAll(dst, sql: "SELECT a.groupKey, SUM(h.energyNJ) AS energy FROM AppUsageHour h JOIN App a ON a.id=h.appId WHERE h.metricVersion=0 GROUP BY a.groupKey")
         let newAppTotals = Dictionary(uniqueKeysWithValues: newApps.compactMap { row -> (String, Int64)? in
             guard let key: String = row["groupKey"], let value: Int64 = row["energy"] else { return nil }; return (key, value)
@@ -549,9 +549,9 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         })
         if oldTotals.buckets != newBucketTotals { throw LegacyImportError.verificationFailed("Per-bucket metricVersion 0 hour totals do not match the legacy database.") }
         let batteryOld = oldTotals.batteryCount
-        let batteryNew = try Int.fetchOne(dst, sql: "SELECT COUNT(*) FROM BatteryStatus") ?? 0
+        let batteryNew = try Int.fetchOne(dst, sql: "SELECT COUNT(*) FROM BatteryStatus WHERE timestamp < ?", arguments: [upperBound]) ?? 0
         if batteryOld != batteryNew { throw LegacyImportError.verificationFailed("Battery row count differs (legacy \(batteryOld), new \(batteryNew)).") }
-        let eventNew = try Int.fetchOne(dst, sql: "SELECT COUNT(*) FROM PowerEvents") ?? 0
+        let eventNew = try Int.fetchOne(dst, sql: "SELECT COUNT(*) FROM PowerEvents WHERE timestamp < ?", arguments: [upperBound]) ?? 0
         if oldTotals.eventCount != eventNew { throw LegacyImportError.verificationFailed("Power event row count differs (legacy \(oldTotals.eventCount), new \(eventNew)).") }
         let appRaw = try Int64.fetchOne(dst, sql: "SELECT COALESCE(SUM(energyNJ), 0) FROM AppSampleRaw WHERE metricVersion=0") ?? 0
         let bucketRaw = try Int64.fetchOne(dst, sql: "SELECT COALESCE(SUM(energyNJ), 0) FROM BucketSampleRaw WHERE metricVersion=0") ?? 0
@@ -583,7 +583,7 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
                     guard equal else { throw LegacyImportError.verificationFailed("Battery payload conflicts at timestamp \(timestamp).") }
                 }
                 try db.execute(sql: """
-                    INSERT OR IGNORE INTO BatteryStatus(timestamp, levelPercent, capacityMAh, designMAh, cycleCount, voltageMV, amperageMA, temperatureC, timeRemainingMin, isCharging, isACPlugged)
+                    INSERT OR REPLACE INTO BatteryStatus(timestamp, levelPercent, capacityMAh, designMAh, cycleCount, voltageMV, amperageMA, temperatureC, timeRemainingMin, isCharging, isACPlugged)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, arguments: [timestamp, row["levelPercent"] as Double?, row["capacityMAh"] as Int?, row["designMAh"] as Int?, row["cycleCount"] as Int?, row["voltageMV"] as Int?, row["amperageMA"] as Int?, row["temperatureC"] as Double?, row["timeRemainingMin"] as Int?, row["isCharging"] as Bool, row["isACPlugged"] as Bool])
                 copiedBatteries += 1
@@ -600,7 +600,7 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
                     guard equal else { throw LegacyImportError.verificationFailed("Power event payload conflicts at timestamp \(timestamp).") }
                 }
                 try db.execute(sql: """
-                    INSERT OR IGNORE INTO PowerEvents(timestamp, eventType, durationSeconds, metadata)
+                    INSERT OR REPLACE INTO PowerEvents(timestamp, eventType, durationSeconds, metadata)
                     VALUES (?, ?, ?, ?)
                     """, arguments: [timestamp, row["eventType"] as String, row["durationSeconds"] as Int?, row["metadata"] as String?])
             }
