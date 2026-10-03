@@ -212,6 +212,7 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         XCTAssertEqual(totals.batteryCount, 32)
         XCTAssertEqual(totals.eventCount, 32)
         var scaledCPU: Int64 = 0
+        // v0.9.x and earlier stored raw mach ticks in cpuUserNs/cpuSystemNs; import applies the timebase once.
         for day in 0..<32 {
             let sampleCPU = (Int64(150) + Int64(day)) * Int64(125) / Int64(3)
             scaledCPU += 2 * sampleCPU

@@ -387,6 +387,7 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
             let user = row.cpuUserNs
             let system = row.cpuSystemNs
             let sum = user.addingReportingOverflow(system)
+            // Legacy rows from v0.9.x and earlier store raw mach ticks, so apply the timebase here.
             let scaled = sum.partialValue.multipliedReportingOverflow(by: timebase.numer)
             guard !sum.overflow, !scaled.overflow else { throw LegacyImportError.verificationFailed("CPU time overflow for app group \(key).") }
             let cpuNs = scaled.partialValue / timebase.denom

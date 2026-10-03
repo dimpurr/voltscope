@@ -177,6 +177,28 @@ final class HistoryDatabaseQueryTests: XCTestCase {
         XCTAssertEqual(rows[0].totalCPUNS, 4_000_000_000)
     }
 
+    func testIntelHistoryAndMenuBarRankBusyAppsByCPUTime() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let nowMS = Int64(Date().timeIntervalSince1970 * 1000)
+        let idleID = try await db.upsertApp(groupKey: "a.idle", bundleIdentifier: "a.idle",
+                                            displayName: "Idle", path: "/Apps/Idle.app", ts: nowMS)
+        let busyID = try await db.upsertApp(groupKey: "z.busy", bundleIdentifier: "z.busy",
+                                            displayName: "Busy", path: "/Apps/Busy.app", ts: nowMS)
+        try await db.dbPool.write { conn in
+            for (appID, cpuNS) in [(idleID, Int64(1_000_000_000)), (busyID, Int64(9_000_000_000))] {
+                try AppSampleRaw(ts: nowMS, appId: appID, pid: 77, parentPid: nil,
+                                 metricVersion: EnergyMetric.currentVersion, energyNJ: 0, cpuNs: cpuNS,
+                                 wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0).insert(conn)
+            }
+        }
+
+        let history = try await db.historyAppBreakdown(in: interval(nowMS - 30_000, nowMS + 30_000), range: .live,
+                                                       energyAvailable: false)
+        let menuBar = try await db.topApps(sinceMinutes: 30, energyAvailable: false)
+        XCTAssertEqual(history.map(\.id), ["z.busy", "a.idle"])
+        XCTAssertEqual(menuBar.map(\.id), ["z.busy", "a.idle"])
+    }
+
     func testHardwareRollupsAndRawTailMatchRawTotals() async throws {
         for range in HistoryRange.allCases {
             let (db, raw, end) = try await fixture(range)

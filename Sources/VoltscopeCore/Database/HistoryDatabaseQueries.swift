@@ -81,7 +81,8 @@ extension HistoryDatabase {
     }
 
     /// Returns app totals from the same routed tier query used by History charts.
-    public func historyAppBreakdown(in interval: DateInterval, range: HistoryRange) async throws -> [AppBreakdownEntry] {
+    public func historyAppBreakdown(in interval: DateInterval, range: HistoryRange,
+                                    energyAvailable: Bool = true) async throws -> [AppBreakdownEntry] {
         let rows = try await energyRows(in: interval, range: range, metricVersion: EnergyMetric.currentVersion,
                                         includeZeroEnergy: true)
         let points = rows.map { row in
@@ -95,6 +96,10 @@ extension HistoryDatabase {
         return HistoryMath.apps(points).map {
             AppBreakdownEntry(bundleIdentifier: $0.bundleIdentifier, processName: $0.name, path: $0.path,
                               totalEnergyNJ: $0.energyNJ, totalCPUNS: $0.cpuNS, isSystem: $0.isSystem)
+        }.sorted { lhs, rhs in
+            let left = energyAvailable ? lhs.totalEnergyNJ : lhs.totalCPUNS
+            let right = energyAvailable ? rhs.totalEnergyNJ : rhs.totalCPUNS
+            return left == right ? lhs.id < rhs.id : left > right
         }
     }
 
