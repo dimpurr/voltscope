@@ -2,6 +2,9 @@
 
 ## Unreleased — 0.10.0
 
+- Added stable accessibility labels and identifiers for menu bar actions,
+  History controls, and interactive Settings controls. Battery status values
+  now have descriptive spoken labels for VoiceOver and UI automation.
 - App energy now uses the per-task CPU energy counter. Values may be hundreds
   or thousands of times larger than older readings because the previous counter
   reported energy billed through a task bank rather than the task’s own energy.

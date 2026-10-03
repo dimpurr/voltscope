@@ -49,6 +49,8 @@ struct HistoryWindow: View {
                             if selectedApp != nil {
                                 Button { selectedApp = nil } label: { Image(systemName: "xmark.circle.fill") }
                                     .buttonStyle(.plain).help("Clear app highlight")
+                                    .accessibilityLabel("Clear app highlight")
+                                    .accessibilityIdentifier(AccessibilityIdentifiers.historyClearAppSelection)
                             }
                         }
                         .help("Recorded CPU attribution only. Not a share of whole-device battery drain. Blank periods may be idle or missing observations; edge buckets may be partial.")
@@ -114,15 +116,25 @@ struct HistoryWindow: View {
         ToolbarItem(placement: .principal) {
             Picker("Time range", selection: $range) { ForEach(Range.allCases) { Text($0.rawValue).tag($0) } }
                 .pickerStyle(.segmented).frame(width: 280)
+                .accessibilityLabel("Time range")
+                .accessibilityIdentifier(AccessibilityIdentifiers.historyTimeRange)
                 .onChange(of: range) { _ in rangeManuallyChosen = true }
         }
         ToolbarItem(placement: .principal) {
-            Menu { Toggle("Group system processes", isOn: $groupSystem) } label: { Label("Display", systemImage: "slider.horizontal.3") }
+            Menu {
+                Toggle("Group system processes", isOn: $groupSystem)
+                    .accessibilityLabel("Group system processes")
+                    .accessibilityIdentifier(AccessibilityIdentifiers.historyGroupSystemProcesses)
+            } label: { Label("Display", systemImage: "slider.horizontal.3") }
                 .menuIndicator(.visible).help("Display options")
+                .accessibilityLabel("Display options")
+                .accessibilityIdentifier(AccessibilityIdentifiers.historyDisplayOptions)
         }
         ToolbarItem(placement: .primaryAction) {
             Button { exportCurrent() } label: { Label("Export as CSV…", systemImage: "square.and.arrow.up") }
                 .disabled(isExporting || !loaded || appState.database == nil)
+                .accessibilityLabel("Export as CSV")
+                .accessibilityIdentifier(AccessibilityIdentifiers.historyExportCSV)
         }
     }
 

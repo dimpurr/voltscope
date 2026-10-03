@@ -17,51 +17,65 @@ struct HistoryStatusBar: View {
 
     private var chargeBlock: some View {
         HStack(spacing: 6) {
-            Image(systemName: chargeIcon).foregroundStyle(chargeColor)
+            Image(systemName: chargeIcon).foregroundStyle(chargeColor).accessibilityHidden(true)
             Text(chargeText)
                 .font(.callout.bold().monospacedDigit())
             Text(chargeStateLabel)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Battery \(chargeAccessibilityValue), \(chargeStateLabel.isEmpty ? "status unavailable" : chargeStateLabel.lowercased())")
     }
 
     private var healthBlock: some View {
         HStack(spacing: 6) {
             Image(systemName: "heart.fill")
                 .foregroundStyle(healthColor)
+                .accessibilityHidden(true)
             Text(healthText)
                 .font(.callout.monospacedDigit())
             Text(conditionText)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Battery health \(healthAccessibilityValue), condition \(conditionText)")
     }
 
     private var tempBlock: some View {
         HStack(spacing: 6) {
             Image(systemName: "thermometer.medium")
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             Text(tempText).font(.callout.monospacedDigit())
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Battery temperature \(temperatureAccessibilityValue)")
     }
 
     private var timeBlock: some View {
         HStack(spacing: 6) {
             Image(systemName: "hourglass")
                 .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
             Text(timeText).font(.callout.monospacedDigit())
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Time remaining: \(timeAccessibilityValue)")
     }
 
     private var drainBlock: some View {
         HStack(spacing: 6) {
             Image(systemName: "bolt.fill")
                 .foregroundStyle(drainIconColor)
+                .accessibilityHidden(true)
             Text(drainText)
                 .font(.callout.monospacedDigit())
                 .help(drainHelpText)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Battery power: \(drainAccessibilityValue)")
     }
 
     private var drainIconColor: Color {
@@ -99,6 +113,33 @@ struct HistoryStatusBar: View {
     private var chargeText: String {
         guard let level = battery?.levelPercent else { return "—" }
         return "\(Int(level.rounded()))%"
+    }
+
+    private var chargeAccessibilityValue: String {
+        guard let level = battery?.levelPercent else { return "charge unavailable" }
+        return "\(Int(level.rounded())) percent"
+    }
+
+    private var healthAccessibilityValue: String {
+        guard let ratio = healthRatio else { return "unavailable" }
+        return "\(Int((ratio * 100).rounded())) percent"
+    }
+
+    private var temperatureAccessibilityValue: String {
+        guard let celsius = battery?.temperatureC else { return "unavailable" }
+        let fahrenheit = celsius * 9 / 5 + 32
+        return String(format: "%.1f degrees Celsius, %.1f degrees Fahrenheit", celsius, fahrenheit)
+    }
+
+    private var timeAccessibilityValue: String {
+        guard battery?.timeRemainingMin != nil, timeText != "—" else { return "unavailable" }
+        return timeText
+    }
+
+    private var drainAccessibilityValue: String {
+        guard let watts = battery?.instantaneousWatts else { return "unavailable" }
+        let state = battery?.isCharging == true ? "charging" : battery?.isACPlugged == true ? "plugged in" : "discharging"
+        return String(format: "%.1f watts, %@", watts, state)
     }
 
     private var chargeStateLabel: String {

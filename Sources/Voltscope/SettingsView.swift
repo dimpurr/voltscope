@@ -18,6 +18,7 @@ struct SettingsView: View {
                 .toggleStyle(.switch)
                 .disabled(!appState.canEnableLaunchAtLogin && appState.loginItemStatus != .enabled)
                 .accessibilityLabel("Launch at login")
+                .accessibilityIdentifier(AccessibilityIdentifiers.settingsLaunchAtLogin)
                 .accessibilityHint("Starts Voltscope in the menu bar when you sign in.")
 
             Text("Start Voltscope in the menu bar when you sign in.")
@@ -35,6 +36,8 @@ struct SettingsView: View {
                         appState.openLoginItems()
                     }
                     .controlSize(.small)
+                    .accessibilityLabel("Open Login Items")
+                    .accessibilityIdentifier(AccessibilityIdentifiers.settingsOpenLoginItems)
                 }
             } else if let message = appState.loginItemFeedback {
                 feedback(message, symbol: "info.circle")
@@ -50,6 +53,8 @@ struct SettingsView: View {
             }
             .pickerStyle(.menu)
             .disabled(appState.database == nil)
+            .accessibilityLabel("Raw detail retention period")
+            .accessibilityIdentifier(AccessibilityIdentifiers.settingsRawRetention)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("Old database: \(appState.legacyImportStatus?.state.rawValue ?? "checking")")
@@ -71,6 +76,8 @@ struct SettingsView: View {
                     Button("Delete old database now") { appState.deleteLegacyDatabaseNow() }
                         .controlSize(.small)
                         .disabled(appState.legacyImportStatus?.state != .done)
+                        .accessibilityLabel("Delete old database now")
+                        .accessibilityIdentifier(AccessibilityIdentifiers.settingsDeleteLegacyDatabase)
                 }
             }
         }

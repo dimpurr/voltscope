@@ -155,6 +155,8 @@ private struct SystemGroupSection: View {
             }
         }
         .padding(.top, 6)
+        .accessibilityLabel("System processes, \(summary)")
+        .accessibilityIdentifier(AccessibilityIdentifiers.historySystemProcesses)
     }
 
     private var summed: Int64 {

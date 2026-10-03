@@ -48,25 +48,31 @@ struct MenuBarPanel: View {
             HStack {
                 Image(systemName: chargeSymbol)
                     .foregroundStyle(chargeColor)
+                    .accessibilityHidden(true)
                 Text(chargeStateText)
                     .font(.headline)
                 Spacer()
                 Text(percentText)
                     .font(.headline.monospacedDigit())
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(batteryAccessibilityLabel)
             ProgressView(value: (appState.lastBattery?.levelPercent ?? 0) / 100.0)
                 .progressViewStyle(.linear)
                 .tint(chargeColor)
+                .accessibilityHidden(true)
             HStack {
                 Text(timeRemainingText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .accessibilityLabel("Time remaining: \(timeRemainingText)")
                 Spacer()
                 Text(appState.statusText)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .accessibilityLabel("Status: \(appState.statusText)")
             }
         }
     }
@@ -121,6 +127,7 @@ struct MenuBarPanel: View {
                 Text(healthPercentText)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
+                    .accessibilityLabel("Battery health \(healthPercentAccessibilityValue)")
             }
             HealthBar(healthRatio: healthRatio ?? 0)
             HStack(spacing: 16) {
@@ -130,6 +137,7 @@ struct MenuBarPanel: View {
                 Text(temperatureText)
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(.primary)
+                    .accessibilityLabel("Battery temperature \(temperatureAccessibilityValue)")
             }
         }
     }
@@ -140,6 +148,22 @@ struct MenuBarPanel: View {
               let design = battery.designMAh,
               design > 0 else { return nil }
         return Double(capacity) / Double(design)
+    }
+
+    private var batteryAccessibilityLabel: String {
+        let level = appState.lastBattery?.levelPercent.map { "\(Int($0.rounded())) percent" } ?? "unknown charge"
+        return "Battery \(level), \(chargeStateText.lowercased())"
+    }
+
+    private var healthPercentAccessibilityValue: String {
+        guard let ratio = healthRatio else { return "unavailable" }
+        return "\(Int((ratio * 100).rounded())) percent"
+    }
+
+    private var temperatureAccessibilityValue: String {
+        guard let celsius = appState.lastBattery?.temperatureC else { return "unavailable" }
+        let fahrenheit = celsius * 9 / 5 + 32
+        return String(format: "%.1f degrees Celsius, %.1f degrees Fahrenheit", celsius, fahrenheit)
     }
 
     private var healthPercentText: String {
@@ -213,6 +237,8 @@ struct MenuBarPanel: View {
             }
             .buttonStyle(.borderless)
             .help("Open in History window")
+            .accessibilityLabel("Open \(row.processName) in History")
+            .accessibilityIdentifier(AccessibilityIdentifiers.menuOpenAppInHistory)
         }
         .help(rowTooltip(row))
     }
@@ -253,6 +279,7 @@ struct MenuBarPanel: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("System processes")
+            .accessibilityIdentifier(AccessibilityIdentifiers.menuSystemProcesses)
             .accessibilityValue(systemExpanded ? "Expanded" : "Collapsed")
             .accessibilityHint("Shows system processes and their recent energy use")
 
@@ -309,6 +336,7 @@ struct MenuBarPanel: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Open History")
+            .accessibilityIdentifier(AccessibilityIdentifiers.menuOpenHistory)
 
             HStack(spacing: 10) {
                 Button {
@@ -317,6 +345,8 @@ struct MenuBarPanel: View {
                 } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
+                .accessibilityLabel("Settings")
+                .accessibilityIdentifier(AccessibilityIdentifiers.menuSettings)
                 Button {
                     appState.checkForUpdates()
                 } label: {
@@ -329,11 +359,14 @@ struct MenuBarPanel: View {
                 .disabled(!appState.canCheckForUpdates)
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("Check for Updates, version \(appState.appVersion)")
+                .accessibilityIdentifier(AccessibilityIdentifiers.menuCheckForUpdates)
                 Button {
                     NSApp.terminate(nil)
                 } label: {
                     Label("Quit", systemImage: "power")
                 }
+                .accessibilityLabel("Quit")
+                .accessibilityIdentifier(AccessibilityIdentifiers.menuQuit)
             }
             .buttonStyle(.borderless)
             .controlSize(.small)
@@ -355,5 +388,7 @@ private struct LabeledMetric: View {
             Text(value)
                 .font(.callout)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label): \(value)")
     }
 }

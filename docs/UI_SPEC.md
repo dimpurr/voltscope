@@ -246,6 +246,19 @@ fails if this table drifts from the code
 | `Display` Menu (`slider.horizontal.3`) | `.principal` (right of picker) | macOS "View Options" idiom — opens a menu with checkmark items. Currently holds `Group system processes`; future toggles (event markers, sparkline visibility, top-N count) extend here without burning toolbar real estate. *Replaces v0.5.1's label-less Toggle.* |
 | `Export as CSV…` | `.primaryAction` | Format named in the button so users know the output type before clicking. The save panel title also reads `Export Energy History as CSV`. |
 
+### Accessibility identifiers
+
+Accessibility identifiers are stable interface names for assistive technology
+and UI automation. Keep identifiers in English, preserve their spelling across
+releases, and update tests and automation clients deliberately when a change is
+unavoidable. Labels describe the current control in plain language; dynamic
+values such as charge percentage and charging state remain in the spoken label.
+Decorative symbols and progress decoration are hidden from the accessibility
+tree when their information is already expressed in text.
+
+The current menu, History, and Settings identifiers are declared in
+`AccessibilityIdentifiers` and are covered by `AccessibilityIdentifierTests`.
+
 ### Chart hover behavior (v0.5.2)
 
 Stacked bars are colored by app via `foregroundStyle(by:)`, which makes glance-interpretation hard once more than three apps are present — the legend becomes a memory-aid lookup table. Keep the hover detail contextual to the selected bucket:
