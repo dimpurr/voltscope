@@ -162,6 +162,176 @@ final class HistoryDatabaseQueryTests: XCTestCase {
         }
     }
 
+    func testTierSwitchBoundariesGapsIdentityAndMetricVersionsForEveryRange() async throws {
+        for range in HistoryRange.allCases {
+            let db = try HistoryDatabase.makeInMemory()
+            let appID = try await db.upsertApp(groupKey: "com.example.stable", bundleIdentifier: "com.example.stable",
+                                               displayName: "Stable App", path: "/Apps/Stable.app", ts: 0)
+            let bucketID = try await db.upsertBucket(name: "CPU")
+            let tierMS: Int64 = range == .d7 ? 3_600_000 : 60_000
+            let start = 20 * 86_400_000 / tierMS * tierMS
+            let switchAt = start + 2 * tierMS
+            let end = start + 30 * tierMS
+            let currentRows: [(Int64, Int64, Int64)] = [
+                (start + 30_000, 3, 30),
+                (start + tierMS - 30_000, 5, 50),
+                (switchAt, 7, 70),
+                (switchAt + 30_000, 11, 110),
+                (start + 20 * tierMS, 13, 130)
+            ]
+            let legacyRows: [(Int64, Int64, Int64)] = [
+                (start + 45_000, 101, 1_010),
+                (switchAt + 45_000, 103, 1_030)
+            ]
+            try await db.dbPool.write { conn in
+                for (ts, energy, cpu) in currentRows + legacyRows {
+                    let version = legacyRows.contains { $0.0 == ts } ? EnergyMetric.legacyVersion : EnergyMetric.currentVersion
+                    try AppSampleRaw(ts: ts, appId: appID, pid: 71, parentPid: nil, metricVersion: version,
+                                     energyNJ: energy, cpuNs: cpu, wakeups: 1,
+                                     diskReadBytes: 0, diskWriteBytes: 0).insert(conn)
+                    try BucketSampleRaw(ts: ts, bucketId: bucketID, metricVersion: version, energyNJ: energy).insert(conn)
+                }
+
+                if range != .live {
+                    for version in [EnergyMetric.legacyVersion, EnergyMetric.currentVersion] {
+                        let values = (version == EnergyMetric.legacyVersion ? legacyRows : currentRows).filter { $0.0 < switchAt }
+                        guard !values.isEmpty else { continue }
+                        let energy = values.reduce(Int64(0)) { $0 + $1.1 }
+                        let cpu = values.reduce(Int64(0)) { $0 + $1.2 }
+                        let rollupTime = values[0].0 / tierMS
+                        if range == .d7 {
+                            try AppUsageHour(hour: rollupTime, appId: appID, metricVersion: version, energyNJ: energy,
+                                             cpuNs: cpu, wakeups: Int64(values.count), diskReadBytes: 0,
+                                             diskWriteBytes: 0, samples: Int64(values.count)).insert(conn)
+                        } else {
+                            try AppUsageMinute(minute: rollupTime, appId: appID, metricVersion: version, energyNJ: energy,
+                                               cpuNs: cpu, wakeups: Int64(values.count), diskReadBytes: 0,
+                                               diskWriteBytes: 0, samples: Int64(values.count)).insert(conn)
+                        }
+                        let bucketEnergy = values.reduce(Int64(0)) { $0 + $1.1 }
+                        if range == .d7 {
+                            try BucketHour(hour: rollupTime, bucketId: bucketID, metricVersion: version, energyNJ: bucketEnergy).insert(conn)
+                        } else {
+                            try BucketMinute(minute: rollupTime, bucketId: bucketID, metricVersion: version, energyNJ: bucketEnergy).insert(conn)
+                        }
+                    }
+                    let watermarkKey = range == .d7 ? "rollup.hourWatermark" : "rollup.minuteWatermark"
+                    try conn.execute(sql: "INSERT INTO Meta(key, value) VALUES (?, ?)",
+                                     arguments: [watermarkKey, String(switchAt / tierMS - 1)])
+                    let legacyWatermarkKey = range == .d7 ? "legacy.hourMark" : "legacy.minuteMark"
+                    try conn.execute(sql: "INSERT INTO Meta(key, value) VALUES (?, ?)",
+                                     arguments: [legacyWatermarkKey, String(switchAt / tierMS - 1)])
+                }
+            }
+
+            let interval = interval(start, end)
+            let actual = try await db.historyEnergy(in: interval, range: range)
+            let actualEnergy = actual.reduce(Int64(0)) { $0 + $1.energyNJ }
+            let actualCPU = actual.reduce(Int64(0)) { $0 + ($1.cpuNS ?? 0) }
+            XCTAssertEqual(actualEnergy, currentRows.reduce(Int64(0)) { $0 + $1.1 }, "current energy, range \(range.rawValue)")
+            XCTAssertEqual(actualCPU, currentRows.reduce(Int64(0)) { $0 + $1.2 }, "current CPU, range \(range.rawValue)")
+            XCTAssertEqual(Set(actual.map(\.appID)), ["com.example.stable"], "stable color identity, range \(range.rawValue)")
+            let bucketEnergy = try await db.historyHardware(in: interval, range: range).reduce(Int64(0)) { $0 + $1.totalEnergyNJ }
+            XCTAssertEqual(bucketEnergy, currentRows.reduce(Int64(0)) { $0 + $1.1 }, "hardware energy, range \(range.rawValue)")
+
+            let exactBoundary = try await db.historyEnergy(in: self.interval(switchAt, end), range: range)
+            let expectedAtBoundary = currentRows.filter { $0.0 >= switchAt }
+            XCTAssertEqual(exactBoundary.reduce(Int64(0)) { $0 + $1.energyNJ },
+                           expectedAtBoundary.reduce(Int64(0)) { $0 + $1.1 },
+                           "range beginning at the tier switch, range \(range.rawValue)")
+
+            let widthMS = Int64(range.bucketSeconds) * 1000
+            let occupied = Set(actual.map { Int64($0.date.timeIntervalSince1970 * 1000) })
+            let sleepStart = (switchAt + 30_000) / widthMS * widthMS
+            let sleepEnd = (start + 20 * tierMS) / widthMS * widthMS
+            XCTAssertFalse(occupied.contains { $0 > sleepStart && $0 < sleepEnd }, "sleep gap must remain empty, range \(range.rawValue)")
+
+            let legacy = try await db.historyEnergy(in: interval, range: range, metricVersion: EnergyMetric.legacyVersion)
+            XCTAssertEqual(legacy.reduce(Int64(0)) { $0 + $1.energyNJ }, legacyRows.reduce(Int64(0)) { $0 + $1.1 },
+                           "legacy version remains isolated, range \(range.rawValue)")
+            XCTAssertEqual(legacy.reduce(Int64(0)) { $0 + ($1.cpuNS ?? 0) }, legacyRows.reduce(Int64(0)) { $0 + $1.2 },
+                           "legacy CPU remains isolated, range \(range.rawValue)")
+        }
+    }
+
+    func testLondonDSTDaysKeepUTCBucketTotalsAndElapsedDuration() async throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/London"))
+        let cases: [(DateComponents, Double)] = [
+            (DateComponents(year: 2026, month: 3, day: 29), 23 * 3_600),
+            (DateComponents(year: 2026, month: 10, day: 25), 25 * 3_600)
+        ]
+        for (components, expectedDuration) in cases {
+            let db = try HistoryDatabase.makeInMemory()
+            let appID = try await db.upsertApp(groupKey: "com.example.dst", bundleIdentifier: "com.example.dst",
+                                               displayName: "DST App", path: "/Apps/DST.app", ts: 0)
+            let localMidnight = try XCTUnwrap(calendar.date(from: components))
+            let nextMidnight = try XCTUnwrap(calendar.date(byAdding: .day, value: 1, to: localMidnight))
+            XCTAssertEqual(nextMidnight.timeIntervalSince(localMidnight), expectedDuration)
+            let firstMS = Int64(localMidnight.timeIntervalSince1970 * 1000)
+            let lastMS = Int64(nextMidnight.timeIntervalSince1970 * 1000) - 30_000
+            try await db.dbPool.write { conn in
+                try AppUsageHour(hour: firstMS / 3_600_000, appId: appID, metricVersion: EnergyMetric.currentVersion,
+                                 energyNJ: 17, cpuNs: 170, wakeups: 1, diskReadBytes: 0,
+                                 diskWriteBytes: 0, samples: 1).insert(conn)
+                try AppSampleRaw(ts: lastMS, appId: appID, pid: 88, parentPid: nil, metricVersion: EnergyMetric.currentVersion,
+                                 energyNJ: 34, cpuNs: 340, wakeups: 1, diskReadBytes: 0, diskWriteBytes: 0).insert(conn)
+                try conn.execute(sql: "INSERT INTO Meta(key, value) VALUES ('rollup.hourWatermark', ?)",
+                                 arguments: [String(firstMS / 3_600_000)])
+            }
+            let points = try await db.historyEnergy(in: DateInterval(start: localMidnight, end: nextMidnight), range: .d7)
+            XCTAssertEqual(points.reduce(Int64(0)) { $0 + $1.energyNJ }, 51)
+            XCTAssertEqual(points.reduce(Int64(0)) { $0 + ($1.cpuNS ?? 0) }, 510)
+            XCTAssertEqual(points.map(\.date), points.map(\.date).sorted(), "UTC epoch buckets stay ordered through DST")
+            XCTAssertEqual(points.count, 2, "empty UTC buckets remain absent on DST day")
+        }
+    }
+
+    func testMaintenancePruneCutoffsPreserveHourHistoryAndSevenDayQuery() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let nowMS: Int64 = 40 * 86_400_000 / 3_600_000 * 3_600_000
+        let rawCutoff = nowMS - 7 * 86_400_000
+        let minuteCutoff = nowMS / 60_000 - 2 * 24 * 60
+        let appID = try await db.upsertApp(groupKey: "com.example.retained", bundleIdentifier: "com.example.retained",
+                                           displayName: "Retained App", path: "/Apps/Retained.app", ts: 0)
+        let samples: [(Int64, Int64, Int64)] = [
+            (rawCutoff - 30_000, 2, 20),
+            (rawCutoff, 3, 30),
+            ((minuteCutoff - 1) * 60_000, 5, 50),
+            (minuteCutoff * 60_000, 7, 70),
+            (nowMS - 30_000, 11, 110)
+        ]
+        try await db.dbPool.write { conn in
+            for (ts, energy, cpu) in samples {
+                try AppSampleRaw(ts: ts, appId: appID, pid: 99, parentPid: nil, metricVersion: EnergyMetric.currentVersion,
+                                 energyNJ: energy, cpuNs: cpu, wakeups: 1, diskReadBytes: 0, diskWriteBytes: 0).insert(conn)
+            }
+        }
+        let now = Date(timeIntervalSince1970: Double(nowMS) / 1000)
+        try await db.rollupMinutes(now: now)
+        try await db.rollupHours(now: now)
+        try await db.pruneHistory(now: now)
+
+        let retainedRaw = try await db.dbPool.read { conn in
+            try Int64.fetchOne(conn, sql: "SELECT COALESCE(SUM(energyNJ), 0) FROM AppSampleRaw") ?? 0
+        }
+        XCTAssertEqual(retainedRaw, 26, "raw cutoff is inclusive and expired raw rows are removed")
+        let retainedMinutes = try await db.dbPool.read { conn in
+            try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppUsageMinute WHERE minute < ?", arguments: [minuteCutoff]) ?? 0
+        }
+        XCTAssertEqual(retainedMinutes, 0, "minute cutoff removes only rows strictly before the 2-day boundary")
+
+        let interval = self.interval(rawCutoff, nowMS)
+        let sevenDay = try await db.historyEnergy(in: interval, range: .d7)
+        XCTAssertEqual(sevenDay.reduce(Int64(0)) { $0 + $1.energyNJ }, 26)
+        XCTAssertEqual(sevenDay.reduce(Int64(0)) { $0 + ($1.cpuNS ?? 0) }, 260)
+
+        let oldHours = try await db.dbPool.read { conn in
+            try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppUsageHour WHERE hour < ?", arguments: [nowMS / 3_600_000 - 48]) ?? 0
+        }
+        XCTAssertGreaterThan(oldHours, 0, "hour summaries survive both raw and minute pruning")
+    }
+
     func testHistoryAppBreakdownUsesSameTierRoutingAsChart() async throws {
         let (db, _, end) = try await fixture(.d7)
         let window = interval(0, end)
