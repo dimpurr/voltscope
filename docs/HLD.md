@@ -169,8 +169,10 @@ Populated only when helper is installed. Contains powermetrics-derived joule rat
    unavailable and CPU time moved.
 3. Accumulate process and hardware deltas in memory and write one row per
    `(30-second UTC window, app, PID)` or `(window, bucket)` to `history.sqlite`.
-   Flush on window change, maintenance, or shutdown; `Coverage` records the
-   last scan in each window. A partial final window is persisted as-is.
+   Each flush resolves a distinct app group once, then reuses its ID for that
+   group's process rows. Flush on window change, maintenance, or shutdown;
+   `Coverage` records the last scan in each window. A partial final window is
+   persisted as-is.
 4. The existing five-minute checkpoint timer runs the maintenance phases:
    minute rollup, hour rollup, retention pruning, and bounded incremental vacuum.
    Each rollup is idempotent and advances its watermark with the transaction.

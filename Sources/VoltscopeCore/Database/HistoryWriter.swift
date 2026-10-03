@@ -166,16 +166,24 @@ public extension HistoryDatabase {
 
     private func persistWindow(_ batch: WindowBatch) async throws {
         try await dbPool.write { db in
+            var appIDsByGroupKey: [String: Int64] = [:]
+            appIDsByGroupKey.reserveCapacity(batch.apps.count)
             for value in batch.apps {
                 let sample = value.sample
-                let appId = try upsertApp(
-                    db,
-                    groupKey: sample.groupKey,
-                    bundleIdentifier: sample.bundleIdentifier,
-                    displayName: sample.displayName,
-                    path: sample.path,
-                    ts: batch.start
-                )
+                let appId: Int64
+                if let cachedID = appIDsByGroupKey[sample.groupKey] {
+                    appId = cachedID
+                } else {
+                    appId = try upsertApp(
+                        db,
+                        groupKey: sample.groupKey,
+                        bundleIdentifier: sample.bundleIdentifier,
+                        displayName: sample.displayName,
+                        path: sample.path,
+                        ts: batch.start
+                    )
+                    appIDsByGroupKey[sample.groupKey] = appId
+                }
                 try db.execute(sql: """
                     UPDATE AppSampleRaw SET energyNJ=energyNJ+?, cpuNs=cpuNs+?, wakeups=wakeups+?,
                         diskReadBytes=diskReadBytes+?, diskWriteBytes=diskWriteBytes+?

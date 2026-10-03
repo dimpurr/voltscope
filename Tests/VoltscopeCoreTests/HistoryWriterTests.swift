@@ -43,6 +43,32 @@ final class HistoryWriterTests: XCTestCase {
         XCTAssertEqual(coverage?.unreadable, 3)
     }
 
+    func testWindowFlushKeepsSeparatePIDsUnderOneApp() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let timestamp = epoch(2026, 1, 2, 3, 4)
+        try await db.writeTick(timestamp: timestamp, apps: [
+            SampledApp(groupKey: "shared.app", bundleIdentifier: "shared.app", displayName: "Shared",
+                       path: "/Applications/Shared.app", pid: 101, energyNJ: 10, cpuNs: 100),
+            SampledApp(groupKey: "shared.app", bundleIdentifier: "shared.app", displayName: "Shared",
+                       path: "/Applications/Shared.app", pid: 102, energyNJ: 20, cpuNs: 200),
+            SampledApp(groupKey: "shared.app", bundleIdentifier: "shared.app", displayName: "Shared",
+                       path: "/Applications/Shared.app", pid: 103, energyNJ: 30, cpuNs: 300)
+        ], buckets: [], coverage: SampleCoverage(visible: 3, unreadable: 0))
+        try await db.flushPendingWindow()
+
+        let persisted = try db.dbPool.read { conn in
+            let appCount = try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM App WHERE groupKey='shared.app'") ?? 0
+            let rows = try Row.fetchAll(conn, sql: """
+                SELECT r.pid, r.energyNJ FROM AppSampleRaw r JOIN App a ON a.id=r.appId
+                WHERE a.groupKey='shared.app' ORDER BY r.pid
+                """)
+            return (appCount, rows)
+        }
+        XCTAssertEqual(persisted.0, 1)
+        XCTAssertEqual(persisted.1.compactMap { $0["pid"] as Int32? }, [101, 102, 103])
+        XCTAssertEqual(persisted.1.compactMap { $0["energyNJ"] as Int64? }, [10, 20, 30])
+    }
+
     func testCPUOnlyRowsRankWithoutCreatingEnergyJoules() async throws {
         let db = try HistoryDatabase.makeInMemory()
         let ts = Int64(Date().timeIntervalSince1970 * 1000)

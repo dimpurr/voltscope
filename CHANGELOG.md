@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Reduce per-window history flush work by resolving each distinct app group once.
+
 ## 0.10.0 — 2026-10-03
 
 - Raw history and CSV now store one summed row per process/PID and UTC-aligned
