@@ -32,6 +32,14 @@ struct EnergyStackedChart: View {
         return .dateTime.hour().minute()
     }
 
+    private var valueLabels: some View {
+        VStack {
+            Text(model.upper.formatted(.number.precision(.fractionLength(1))))
+            Spacer(); Text((model.upper / 2).formatted(.number.precision(.fractionLength(1))))
+            Spacer(); Text("0").padding(.bottom, 22)
+        }.font(.caption2.monospacedDigit()).foregroundStyle(.secondary).frame(width: 38)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 6) {
@@ -74,11 +82,7 @@ struct EnergyStackedChart: View {
                 .overlay {
                     if model.segments.isEmpty { Text("No recorded CPU energy in this range").font(.callout).foregroundStyle(.secondary) }
                 }
-                VStack {
-                    Text(model.upper.formatted(.number.precision(.fractionLength(1))))
-                    Spacer(); Text((model.upper / 2).formatted(.number.precision(.fractionLength(1))))
-                    Spacer(); Text("0").padding(.bottom, 22)
-                }.font(.caption2.monospacedDigit()).foregroundStyle(.secondary).frame(width: 38)
+                valueLabels
             }.frame(height: 210)
             ViewThatFits(in: .horizontal) {
                 legend

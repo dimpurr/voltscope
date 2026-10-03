@@ -332,24 +332,29 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
                 throw error
             }
 
-            let newest = try Self.readLatestTimestamp(source)
-            if newest == nil || newest! <= bounds.latestTimestamp {
-                let doneAt = Int64(Date().timeIntervalSince1970 * 1000)
-                try await history.dbPool.write { db in
-                    try Self.putMeta(db, key: "legacy.doneAt", value: String(doneAt))
-                    try Self.putMeta(db, key: "legacy.deleteAfter", value: String(doneAt + 7 * 86_400_000))
-                    try Self.putMeta(db, key: "legacy.state", value: LegacyImportState.done.rawValue)
-                    try db.execute(sql: "DELETE FROM Meta WHERE key = 'legacy.error'")
-                }
-                return
-            }
-
-            if round >= Self.maximumConvergenceRounds { return }
-            guard let refreshed = try Self.readBounds(source) else {
-                throw LegacyImportError.emptyLegacyEnergyHistory
-            }
+            guard let refreshed = try await refreshedBoundsOrFinish(source: source, bounds: bounds, round: round) else { return }
             bounds = refreshed
         }
+    }
+
+    private func refreshedBoundsOrFinish(source: DatabaseQueue, bounds: LegacyBounds, round: Int) async throws -> LegacyBounds? {
+        let newest = try Self.readLatestTimestamp(source)
+        if newest == nil || newest! <= bounds.latestTimestamp {
+            let doneAt = Int64(Date().timeIntervalSince1970 * 1000)
+            try await history.dbPool.write { db in
+                try Self.putMeta(db, key: "legacy.doneAt", value: String(doneAt))
+                try Self.putMeta(db, key: "legacy.deleteAfter", value: String(doneAt + 7 * 86_400_000))
+                try Self.putMeta(db, key: "legacy.state", value: LegacyImportState.done.rawValue)
+                try db.execute(sql: "DELETE FROM Meta WHERE key = 'legacy.error'")
+            }
+            return nil
+        }
+
+        guard round < Self.maximumConvergenceRounds else { return nil }
+        guard let refreshed = try Self.readBounds(source) else {
+            throw LegacyImportError.emptyLegacyEnergyHistory
+        }
+        return refreshed
     }
 
     private static func readBounds(_ source: DatabaseQueue) throws -> LegacyBounds? {

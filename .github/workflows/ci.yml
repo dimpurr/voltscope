@@ -6,6 +6,23 @@ on:
   pull_request:
 
 jobs:
+  test-latest-xcode:
+    # macos-26 is the current stable GitHub-hosted arm64 image. Its
+    # /Applications/Xcode.app symlink points to the image's latest stable Xcode
+    # (26.6); Xcode 27 is still a public preview and is not this gate's target.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select latest stable Xcode from the runner image
+        run: |
+          sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer
+          xcodebuild -version
+          swift --version
+      - name: Build with type-check timing warnings
+        run: swift build -Xswiftc -swift-version -Xswiftc 5 -Xswiftc -Xfrontend -Xswiftc -warn-long-expression-type-checking=300 -Xswiftc -Xfrontend -Xswiftc -warn-long-function-bodies=300
+      - name: Test with type-check timing warnings
+        run: swift test --disable-keychain -Xswiftc -swift-version -Xswiftc 5 -Xswiftc -Xfrontend -Xswiftc -warn-long-expression-type-checking=300 -Xswiftc -Xfrontend -Xswiftc -warn-long-function-bodies=300
+
   test:
     runs-on: macos-14
     steps:

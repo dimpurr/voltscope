@@ -58,7 +58,7 @@ enum CSVExporter {
         let samples = try await database.historySamplesForCSV(in: interval)
         for sample in samples {
             let iso = isoFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(sample.timestampMS) / 1000.0))
-            let line = [
+            let fields: [String] = [
                 String(sample.timestampMS),
                 iso,
                 String(sample.pid),
@@ -72,7 +72,8 @@ enum CSVExporter {
                 String(sample.diskReadBytes),
                 String(sample.diskWriteBytes),
                 String(sample.metricVersion)
-            ].joined(separator: ",") + "\n"
+            ]
+            let line = fields.joined(separator: ",") + "\n"
             try handle.write(contentsOf: Data(line.utf8))
         }
     }
