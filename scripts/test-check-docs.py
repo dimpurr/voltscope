@@ -106,7 +106,7 @@ extension HistoryRangeDocsTests {
             )
             (root / "docs").mkdir()
             (root / "docs/HLD.md").write_text(
-                "### Sampling Loop (foreground, every 5s)\n"
+                "### Process and hardware sampling (every 5s)\n"
                 "| `proc_listallpids` + `proc_pid_rusage × 100` | Every 10s | ~3 ms CPU |\n"
                 "### Battery Sampling Loop (every 30s)\n"
                 "| `IOPMPowerSource` snapshot | Every 30s | <1 ms |\n"

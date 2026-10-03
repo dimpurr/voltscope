@@ -79,7 +79,8 @@ CODE_VALUE_RULES = [
         "constant": "processInterval",
         "files": ["docs/HLD.md"],
         "pattern": re.compile(
-            r"(?:Sampling Loop \(foreground, every |`proc_listallpids`[^\n|]*\| Every |GRDB write[^\n|]*\| Every |the )"
+            r"(?:Sampling Loop \(foreground, every |Process and hardware sampling \(every |"
+            r"`proc_listallpids`[^\n|]*\| Every |GRDB write[^\n|]*\| Every |the )"
             r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>seconds?|s)\b"
         ),
     },

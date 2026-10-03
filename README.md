@@ -72,10 +72,10 @@ source](#build-from-source) below.
 Core monitoring requires no account, helper service, or special permission.
 Launch at login is optional and macOS may ask for approval in Login Items. The
 database is stored locally at `~/Library/Application Support/Voltscope/history.sqlite`.
-Raw process detail follows the retention choice in Settings; minute summaries
-are kept for 30 days, while hourly history, battery status, and power events
-are retained. File size depends on activity and sample density rather than a
-fixed cap. See the [architecture guide](docs/HLD.md#data-model).
+Raw process detail follows the retention choice in Settings. Summary, battery,
+event, and storage retention are described in the
+[architecture guide](docs/HLD.md#tiered-history-tables-current). File size
+depends on activity and sample density rather than a fixed cap.
 
 ## What Voltscope measures
 

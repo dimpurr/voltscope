@@ -74,7 +74,7 @@
 | UI | SwiftUI (minimum target: macOS 13+), SwiftUI Charts, MenuBarExtra (window-style) |
 | State | Swift Observation framework (`@Observable`); minimal Combine bridging |
 | Persistence | GRDB.swift 7.x (SQLite wrapper with type-safe queries, WAL mode, migrations) |
-| Sampling APIs | `proc_pid_rusage(RUSAGE_INFO_V6)`, `proc_listallpids`, `IOPMPowerSource`, `NSWorkspace.runningApplications` |
+| Sampling APIs | `proc_pid_rusage(RUSAGE_INFO_V6)`, `proc_listallpids`, `IOPMPowerSource`, `IOReportConnectSampler`, `NSWorkspace.runningApplications` |
 | Helper IPC | NSXPCConnection (XPC service style), Codable message types |
 | Helper installation | SMAppService, `.daemon(plistName:)` |
 | Main-app login item | ServiceManagement `SMAppService.mainApp`, no helper process |
@@ -99,20 +99,34 @@ for new samples.
 - `AppSampleRaw` and `BucketSampleRaw` keep UTC-aligned 30-second windows for
   the configured raw retention period. Sampling remains every five seconds;
   the in-memory writer sums each process/PID and hardware bucket before writing.
-  `Coverage` stores the last scan's visible/unreadable counts per window.
+  `Coverage` stores the last scan's visible/unreadable counts per window and is
+  pruned with raw history. Canonical hardware bucket names are defined in
+  [ENERGY_MODEL.md](ENERGY_MODEL.md#current-sampler-metric-contract).
 - `AppUsageMinute` / `BucketMinute` are retained for 2 days. `AppUsageHour` /
   `BucketHour` and `CoverageHour` are retained indefinitely. Rollups preserve
   metric versions and replace recomputed rows idempotently.
-- `BatteryStatus` and `PowerEvents` retain their legacy column shapes and are
-  copied into the new database during migration.
+- `BatteryStatus` and `PowerEvents` retain their legacy column shapes, are
+  copied into the new database during migration, and are retained indefinitely.
 - `Meta` stores rollup watermarks, migration state and cursor, and
   `settings.rawRetentionDays`.
+
+The current schema has thirteen tables: eleven tiered tables (`App`,
+`AppSampleRaw`, `AppUsageMinute`, `AppUsageHour`, `Bucket`, `BucketSampleRaw`,
+`BucketMinute`, `BucketHour`, `Coverage`, `CoverageHour`, and `Meta`), plus
+`BatteryStatus` and `PowerEvents`, which retain their legacy schemas. The only
+explicit `CREATE INDEX` statements are `AppSampleRaw_ts` on
+`AppSampleRaw(ts)` and `BucketSampleRaw_ts` on `BucketSampleRaw(ts)`.
+`App.groupKey` and `Bucket.name` also have unique constraints. Minute and hour
+summary tables use composite primary keys `(minute|hour, appId|bucketId,
+metricVersion)` and `WITHOUT ROWID`; `Coverage` and `CoverageHour` use timestamp
+and hour primary keys, respectively.
 
 `EnergyMetric.currentVersion` is 1. Current samples use `ri_energy_nj`; CPU time
 converts `ri_user_time + ri_system_time` with the machine Mach timebase. Imported
 rows keep version 0 and their earlier energy values. Queries select one version
-at a time. On Intel, rows with CPU time and zero energy are retained to support
-CPU-time ranking; the interface reports energy as unavailable.
+at a time. On Intel, rows with CPU time and zero energy are retained; the
+interface behavior is specified in
+[UI_SPEC.md](UI_SPEC.md#010--tiered-history-presentation-current).
 
 ### App identity for versioned CLI executables (current)
 
@@ -195,18 +209,22 @@ Populated only when helper is installed. Contains powermetrics-derived joule rat
 
 ## Core Flows
 
-### Sampling Loop (foreground, every 5s)
+### Process and hardware sampling (every 5s)
 
-1. Call `proc_listallpids`; read accessible processes through
-   `proc_pid_rusage(RUSAGE_INFO_V6)` and count permission-denied processes.
+1. Run the process scan and independent IOReport bucket scan. The process scan
+   calls `proc_listallpids`, reads accessible processes through
+   `proc_pid_rusage(RUSAGE_INFO_V6)`, and counts permission-denied processes.
 2. Resolve app identity, convert CPU counters from Mach timebase ticks to
    nanoseconds, and calculate `ri_energy_nj` deltas. First observations establish
    baselines; rows without energy are retained only when CPU energy is
    unavailable and CPU time moved.
 3. Accumulate process and hardware deltas in memory and write one row per
-   `(30-second UTC window, app, PID)` or `(window, bucket)` to `history.sqlite`.
-   Each flush resolves a distinct app group once, then reuses its ID for that
-   group's process rows. Flush on window change, maintenance, or shutdown;
+   `(30-second UTC window, app, PID, metric version)` or
+   `(window, bucket, metric version)` to `history.sqlite`. CSV exports those
+   stored process/PID rows with the window-start timestamp and counters summed
+   across the underlying process ticks. Each flush resolves a distinct app
+   group once, then reuses its ID for that group's process rows. Flush on window
+   change, maintenance, or shutdown;
    `Coverage` records the last scan in each window. A partial final window is
    persisted as-is.
 4. The existing five-minute checkpoint timer runs the maintenance phases:
@@ -284,7 +302,7 @@ identity are combined per bucket across raw, minute, and hour tiers. The exact
 identity predicate and examples are defined in [App identity for versioned CLI
 executables](#app-identity-for-versioned-cli-executables-current).
 
-### Storage budget (0.10.0 candidate)
+### Storage budget (current estimates)
 
 QA observed about 2.23 million raw process rows/day on Apple silicon and about
 1.78 million/day on Intel at five-second writes. Six-tick coalescing reduces
@@ -310,16 +328,18 @@ grow slowly.
 | Bundle identifiers | `NSWorkspace.runningApplications` | None | Yes |
 | System sleep/wake events | `NSWorkspace` notifications | None | Yes |
 | Launch at login | `SMAppService.mainApp` | None | Yes |
-| System CPU/GPU/ANE joule breakdown | `powermetrics` subprocess | **Root** | No |
+| Current system hardware energy buckets | IOReport framework on macOS 13–15; IOReportHub through `IOConnect` on macOS 26+ | No root; private system interface | No (private API) |
+| Planned per-PID GPU time refinement | `powermetrics --show-process-gpu` helper | **Root** | No |
 
-Voltscope ships outside the App Store (Developer ID + notarization) because the per-process sampling does not survive the sandbox's `proc_listallpids` restrictions for other-UID processes. The helper (`powermetrics`) further requires root, which is App Store–prohibited.
+Voltscope ships outside the App Store (Developer ID + notarization) because the per-process sampling does not survive the sandbox's `proc_listallpids` restrictions for other-UID processes. The optional, planned `powermetrics` helper also requires root, which is App Store–prohibited.
 
 ---
 
 ## Distribution
 
-- **Builds**: GitHub Actions on tag push, with Swift Package Manager and Xcode
-  toolchains available on the runner.
+- **Build validation**: GitHub Actions runs pull requests and pushes to `main`.
+  The latest stable Xcode arm64 job and the macOS 14 / macOS 15 Intel jobs are
+  defined in [CONTRIBUTING.md](../CONTRIBUTING.md).
 - **Signing**: Developer ID Application certificate. Sparkle EdDSA public key is
   embedded in the app as `SUPublicEDKey`; the private key stays in Keychain
   account `voltscope` or CI secrets and is never stored in this repository.
@@ -339,18 +359,18 @@ Voltscope ships outside the App Store (Developer ID + notarization) because the 
 
 ---
 
-## Performance Budget
+## Performance and self-cost
 
-| Operation | Frequency | Target cost on M1 Pro |
-|-----------|-----------|----------------------|
-| `proc_listallpids` + `proc_pid_rusage × 100` | Every 5s | ~3 ms CPU |
-| `IOPMPowerSource` snapshot | Every 30s | <1 ms |
-| GRDB write of window aggregates | On window close or maintenance | ~2 ms |
-| SwiftUI Charts repaint (visible window) | On range change | ~50 ms initial, <16 ms on tick |
-| Helper `powermetrics` subprocess | Continuous (1s interval) | ~0.3% CPU (helper process) |
-| **Aggregate Voltscope CPU** | — | **<0.5% averaged** |
+| Operation | Frequency / workload | Evidence |
+|-----------|----------------------|----------|
+| Process scan | Every 5s | One scan per process tick |
+| Battery snapshot | Every 30s | One snapshot per battery tick |
+| App identity lookup during flush | Once per distinct app group in a window | `HistoryWriter.persistWindow` caches IDs within the flush |
+| Window flush and 7-day chart query | Opt-in benchmark: 330 process rows per flush; 330 apps × 168 hourly rows queried | `SelfCostBenchmarkTests`; skipped unless `VOLTSCOPE_SELF_COST_BENCHMARK=1` |
 
-Storage budget: see the current 0.10.0 candidate section above.
+The benchmark reports measured timings on the machine running it. No fixed
+CPU percentage or per-operation latency is promised. The latest Xcode and
+architecture CI matrix is maintained in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ---
 

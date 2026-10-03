@@ -241,38 +241,10 @@ The original HLD planned `SystemPower` table and `SMAppService` helper for v1.0.
 
 ## 7. Storage and retention (current)
 
-The application writes `history.sqlite` with GRDB `DatabasePool` and WAL. Its
-incremental auto-vacuum setting is enabled before schema creation. Sampling
-continues every 5 seconds, while the writer coalesces app/PID and hardware
-bucket deltas into UTC-aligned 30-second raw windows. A window is flushed when
-it changes, during maintenance, and at sampler shutdown; an incomplete final
-window is retained. Coverage stores the last scan's visible and unreadable
-counts for each window. Raw windows are retained for the user-selected period
-(2, 7, 14, or 30 days; default 7). Per-minute summaries are retained for 2
-days. Per-hour summaries, battery snapshots, and power events are retained
-indefinitely.
-
-QA measured about 2.23 million process rows/day on Apple silicon and 1.78
-million/day on Intel before coalescing. Six ticks per window yield estimates of
-about 372,000 and 297,000 app/PID rows/day respectively. The default seven-day
-raw tier therefore holds about 2.60 million or 2.08 million such rows. A
-100,000-row SQLite fixture using the raw schema and timestamp index measured
-54.23 bytes/row: approximately 20.2 MB/day and 141.1 MB/seven days on Apple
-silicon, or 16.1 MB/day and 112.6 MB/seven days on Intel, before minute and
-hour summaries. See the W14 storage report for the fixture method and exact
-output. Database size varies with sampled values, indexes, WAL activity, and
-page reuse. The two-day minute tier leaves a full-day margin for the 24H query.
-
-A maintenance run is scheduled on the existing five-minute checkpoint timer. It
-recomputes eligible minute and hour summaries, prunes expired raw and minute
-rows, then requests `PRAGMA incremental_vacuum(2000)`. Rollups are versioned and
-idempotent. On-disk size depends on the number of active processes, sample
-activity, and SQLite page reuse; the implementation does not promise a fixed
-maximum database size.
-
-The former `db.sqlite` remains read-only migration input. Import is resumable
-and verified before it can be deleted. A completed import sets a seven-day
-delete deadline; Settings can delete it sooner after completion.
+Storage layout, sampling cadence, raw-window coalescing, and retention periods
+are owned by the [HLD tiered history tables](HLD.md#tiered-history-tables-current).
+Storage estimates are in the [HLD storage budget](HLD.md#storage-budget-current-estimates).
+This document covers the meaning and limits of the energy values stored there.
 
 
 ---
@@ -306,13 +278,17 @@ per-process hardware-estimated CPU energy. Earlier records using `ri_billed_ener
 `ri_system_time` using the active Mach timebase before recording nanoseconds.
 The first observation establishes a baseline. Intervals with zero energy
 delta do not emit process rows when process energy is available; on Intel,
-process rows with CPU time are still recorded with zero energy. The system bucket sampler selects a summary
-channel per die when available, or CPU cluster channels when no CPU summary
-exists; CPU core channels are retained only when that die has neither a CPU
-summary nor any cluster total. GPU Energy suppresses GPU child channels on the
-same die, while GPU SRAM remains a separate bucket. IOReport channels without
-an Energy unit are skipped. Process coverage counts include successful reads
-and `EPERM` failures; transient process exits such as `ESRCH` are excluded.
+process rows with CPU time are still recorded with zero energy. The system
+bucket sampler selects a summary channel per die when available, or CPU
+cluster channels when no CPU summary exists; CPU core channels are retained
+only when that die has neither a CPU summary nor any cluster total. GPU Energy
+suppresses GPU child channels on the same die. Canonical channel groups include
+`CPU`, `GPU`, `GPU SRAM`, `ANE`, `Video`, `Camera`, `DRAM`, `Fabric`, `Display`,
+`PCIe`, and `Power Mgmt`; GPU SRAM channel variants, including `GPU CS SRAM`,
+are stored as `GPU SRAM`. Unrecognized channel names remain separate buckets.
+IOReport channels without an Energy unit are skipped. Process coverage counts
+include successful reads and `EPERM` failures; transient process exits such as
+`ESRCH` are excluded.
 Each process scan writes visible and unreadable counts to `Coverage`; hourly totals are retained in `CoverageHour`. Energy availability is exposed by the sampling coordinator and the interface.
 
 Battery discharge integration requires both adjacent endpoints to be unplugged, non-charging, with nonpositive signed current and valid voltage. Gaps over 90 seconds and supply transitions are excluded; trapezoidal integration is clipped to the query bounds. This is observed discharge, not a full-window total. Sleep and missing coverage are not inferred. Hardware channels are displayed independently in joules without battery percentages or subtraction-based Other.

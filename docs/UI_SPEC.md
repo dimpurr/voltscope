@@ -307,17 +307,10 @@ Stacked bars are colored by app via `foregroundStyle(by:)`, which makes glance-i
 
 ## Process Classification
 
-For deciding "user app vs system" coloring/grouping. Minimal heuristic for v0.5.1:
-
-```
-isSystemProcess(bundleId, processName, path):
-    return bundleId == nil
-        || bundleId.hasPrefix("com.apple.")
-```
-
-This intentionally errs on the side of declaring things "system." False positives (an Apple-bundled app classified as system) can be revisited per-app; false negatives (third-party background helpers shown as user apps) are safer because the user can still see them clearly.
-
-A more refined classifier (path-based, allowlist for Safari etc.) is deferred to v0.6+ if the heuristic proves too coarse in practice.
+The current user-app and system-process classification follows the identity
+resolution contract in [HLD: versioned CLI executables](HLD.md#app-identity-for-versioned-cli-executables-current).
+That contract supersedes the early v0.5.1 heuristic described in this section's
+history.
 
 ---
 
@@ -345,8 +338,13 @@ This section supersedes all earlier History layout, chart, removal and legend ru
   other bundle-less process names stay separate and system-classified.
 - The existing top range picker (see [Range selector](#range-selector)) is the only time filter. Both charts, the bottom Energy breakdown / Apps columns, and CSV export use the selected range. Hover reads a bucket; selecting an app or legend item only dims other series and never changes the range.
 - Battery charging uses a green status band; sleep uses a separate muted band. Missing battery observations break the trace. No emoji event rules through the energy plot.
-- Ranges use UTC-aligned buckets sized per the [generated range table](#range-selector). 6H uses hourly axis labels; 7D deliberately shows four bars per day instead of one oversized daily bar. Edge buckets are partial and identified as such. Energy is shown in J for this CPU-only release.
-- CSV exports one row per process and PID per UTC-aligned 30-second window. The row timestamp is the window start, and its CPU, energy, wakeup, and disk counters sum the underlying five-second samples. Live charts read this same raw window tier; 1H, 6H, and 24H use minute summaries retained for two days, and 7D uses permanent hourly summaries.
+- Ranges use UTC-aligned buckets sized per the [generated range table](#range-selector). Edge buckets are partial and identified as such. Energy is shown in J for this CPU-only release.
+- CSV exports raw process rows within the selected range and available raw
+  retention window. Window formation and query-tier details are owned by
+  [HLD](HLD.md#tiered-history-tables-current). The ordered public columns are
+  `timestamp_ms`, `iso8601`, `pid`, `parent_pid`, `bundle_id`, `process_name`,
+  `path`, `cpu_ns`, `energy_nj`, `wakeups`, `disk_read_bytes`,
+  `disk_write_bytes`, and `metric_version`.
 - The original v0.6.2 full-width chart plus equal bottom columns are preserved. Hardware measurements remain in the left Energy breakdown column and are independent of App CPU totals.
 - History is a normal Dock-visible document while its window is open. Closing
   the window returns Voltscope to accessory mode; it does not terminate the
@@ -446,10 +444,11 @@ current readings. The chart and hardware breakdown query current-version energy
 by default.
 
 On Intel Macs, app energy is unavailable. The app list and menu panel rank apps
-by CPU time and show CPU time values; they do not show a zero-joule reading. The
-History window states that Intel Mac computers do not provide per-process
-energy data. After each process scan, History can show how many system processes
-could not be read.
+by CPU time and show CPU time values; they do not show a zero-joule reading.
+The underlying row behavior is described in
+[HLD](HLD.md#tiered-history-tables-current). The History window states that
+Intel Mac computers do not provide per-process energy data. After each process
+scan, History can show how many system processes could not be read.
 
 Settings includes raw-detail retention with 2, 7, 14, and 30 day choices
 (default 7 days). It shows legacy import status and progress where available,
