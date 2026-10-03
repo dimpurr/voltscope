@@ -250,11 +250,17 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
             let savedCursorText = try await meta("legacy.cursorHour")
             let savedCursor = savedCursorText.flatMap(Int64.init)
             let startHour = max(bounds.minHour, (savedCursor ?? (bounds.minHour - 1)) + 1)
+            // The still-open boundary hour is re-read on the next pass. Storing
+            // its cursor as `hour - 1` in the same transaction as its rows
+            // means an interruption can never leave the cursor pointing at or
+            // past it, so a resume always re-reads the open hour.
+            let boundaryCursor = bounds.maxHour - 1
             if startHour <= bounds.maxHour {
                 for hour in startHour...bounds.maxHour {
                     try Task.checkCancellation()
                     let start = hour * 3_600_000
                     let end = start + 3_600_000
+                    let cursorHour = hour == bounds.maxHour ? boundaryCursor : hour
                     try await history.dbPool.write { db in
                         try db.execute(sql: "DELETE FROM AppSampleRaw WHERE metricVersion=0 AND ts >= ? AND ts < ?", arguments: [start, end])
                         try db.execute(sql: "DELETE FROM BucketSampleRaw WHERE metricVersion=0 AND ts >= ? AND ts < ?", arguments: [start, end])
@@ -263,15 +269,12 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
                                                 snapshotUpper: snapshotUpper,
                                                 minuteCutoff: minuteCutoff, rawCutoff: rawCutoff, timebase: self.timebase)
                         }
-                        try Self.putMeta(db, key: "legacy.cursorHour", value: String(hour))
+                        try Self.putMeta(db, key: "legacy.cursorHour", value: String(cursorHour))
                         try Self.putMeta(db, key: "legacy.state", value: LegacyImportState.importing.rawValue)
                     }
                     progressHandler?(LegacyImportProgress(importedHours: hour - bounds.minHour + 1,
                                                           totalHours: bounds.maxHour - bounds.minHour + 1))
                 }
-                // Re-import the boundary hour on the next pass so commits that
-                // land in the currently open hour are not skipped.
-                let boundaryCursor = bounds.maxHour - 1
                 try await history.dbPool.write { db in
                     try Self.writeLegacyMarks(db)
                     try Self.putMeta(db, key: "legacy.cursorHour", value: String(boundaryCursor))
@@ -288,7 +291,19 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
             let oldTotals = try Self.sourceRead(source) { src in
                 try Self.readVerificationTotals(src, rawCutoff: rawCutoff, upperBound: snapshotUpper)
             }
-            try await history.dbPool.read { dst in try Self.verify(oldTotals, dst) }
+            do {
+                try await history.dbPool.read { dst in try Self.verify(oldTotals, dst) }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Record the same boundary cursor before the outer handler
+                // stores `failed`, so a retry re-reads the open hour rather
+                // than skipping it past a possibly stale snapshot.
+                try await history.dbPool.write { db in
+                    try Self.putMeta(db, key: "legacy.cursorHour", value: String(boundaryCursor))
+                }
+                throw error
+            }
 
             let newest = try Self.readLatestTimestamp(source)
             if newest == nil || newest! <= bounds.latestTimestamp {
@@ -317,16 +332,26 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
             let lows = [e["lo"] as Int64?, b["lo"] as Int64?].compactMap { $0 }
             let highs = [e["hi"] as Int64?, b["hi"] as Int64?].compactMap { $0 }
             guard let lo = lows.min(), let hi = highs.max() else { return nil }
-            return LegacyBounds(minHour: lo / 3_600_000, maxHour: hi / 3_600_000, latestTimestamp: hi)
+            // The hourly loop walks energy records, but the snapshot bound and
+            // the convergence check must also cover battery rows and power
+            // events: those are copied outside the loop on their own clocks, so
+            // a later one would otherwise be left behind and never verified.
+            let newest = try latestTimestamp(db) ?? hi
+            return LegacyBounds(minHour: lo / 3_600_000, maxHour: hi / 3_600_000, latestTimestamp: newest)
         }
     }
 
     private static func readLatestTimestamp(_ source: DatabaseQueue) throws -> Int64? {
-        try sourceRead(source) { db in
-            let app = try Int64.fetchOne(db, sql: "SELECT MAX(timestamp) FROM EnergyHistory")
-            let bucket = try Int64.fetchOne(db, sql: "SELECT MAX(timestamp) FROM SystemBuckets")
-            return [app, bucket].compactMap { $0 }.max()
-        }
+        try sourceRead(source) { db in try latestTimestamp(db) }
+    }
+
+    /// Newest committed timestamp across every imported legacy table.
+    private static func latestTimestamp(_ db: Database) throws -> Int64? {
+        let app = try Int64.fetchOne(db, sql: "SELECT MAX(timestamp) FROM EnergyHistory")
+        let bucket = try Int64.fetchOne(db, sql: "SELECT MAX(timestamp) FROM SystemBuckets")
+        let battery = try Int64.fetchOne(db, sql: "SELECT MAX(timestamp) FROM BatteryStatus")
+        let event = try Int64.fetchOne(db, sql: "SELECT MAX(timestamp) FROM PowerEvents")
+        return [app, bucket, battery, event].compactMap { $0 }.max()
     }
 
     private static func importHour(

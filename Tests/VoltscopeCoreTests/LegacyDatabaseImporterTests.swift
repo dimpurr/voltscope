@@ -498,6 +498,168 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         }
     }
 
+    func testBatteryAndEventRowsNewerThanEnergyOrBucketsAreImported() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 3)
+        // Sleeping stamps the event after the last energy tick and the upgrade
+        // runs on the next boot, so the battery row and the sleep event are
+        // newer than any energy or bucket row. A snapshot bound taken from
+        // energy alone would copy and verify only up to that older bound.
+        let base: Int64 = 1_700_000_000_000
+        let day: Int64 = 86_400_000
+        let hour: Int64 = 3_600_000
+        let lastEnergyTimestamp = base + 2 * day + 12 * hour + 3_000
+        let lateTimestamp = lastEnergyTimestamp + 3 * hour
+        let writer = try DatabaseQueue(path: legacyURL.path)
+        try await writer.write { db in
+            try BatterySnapshot(timestamp: lateTimestamp, levelPercent: 41, capacityMAh: 4_000, designMAh: 5_000,
+                                cycleCount: 101, voltageMV: 11_900, amperageMA: -400, temperatureC: 31,
+                                timeRemainingMin: 80, isCharging: false, isACPlugged: true).insert(db)
+            try PowerEvent(timestamp: lateTimestamp, eventType: .sleep, durationSeconds: 7, metadata: "late").insert(db)
+        }
+        let history = try makeHistory()
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                         timebase: LegacyTimebase(numer: 1, denom: 1)).start().value
+
+        let result = try await history.dbPool.read { db -> (String, Int, Int, Double?, String?) in
+            (
+                try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'") ?? "",
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM BatteryStatus") ?? 0,
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM PowerEvents") ?? 0,
+                try Double.fetchOne(db, sql: "SELECT levelPercent FROM BatteryStatus WHERE timestamp = ?", arguments: [lateTimestamp]),
+                try String.fetchOne(db, sql: "SELECT eventType FROM PowerEvents WHERE timestamp = ?", arguments: [lateTimestamp])
+            )
+        }
+        XCTAssertEqual(result.0, "done")
+        XCTAssertEqual(result.1, 4, "the battery row committed after the last energy tick must be imported")
+        XCTAssertEqual(result.2, 4, "the power event committed after the last energy tick must be imported")
+        XCTAssertEqual(result.3, 41)
+        XCTAssertEqual(result.4, "sleep")
+        withExtendedLifetime(writer) {}
+    }
+
+    func testMaintenanceKeepsImportedLegacyBoundaryRows() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        let writer = try DatabaseQueue(path: legacyURL.path)
+        _ = try AppDatabase(dbPool: writer)
+        // The newest commit defines the window anchor. Its offset inside a
+        // minute and an hour is nonzero, so the 7-day raw cutoff and the
+        // 30-day minute cutoff each fall inside a bucket instead of on its
+        // edge. Each boundary bucket then has energy on both sides of the
+        // cutoff, which a recompute from the finer tier alone cannot see.
+        let anchor: Int64 = 1_700_000_010_000
+        let rawCutoff = anchor - 7 * 86_400_000
+        let minuteCutoff = anchor - 30 * 86_400_000
+        let timestamps = [rawCutoff - 1_000, rawCutoff + 1_000, minuteCutoff - 1_000, minuteCutoff + 1_000, anchor]
+        try await writer.write { db in
+            for (ts, energy) in zip(timestamps, [5, 7, 11, 13, 17]) {
+                try Self.insertEnergy(db, timestamp: ts, energyNJ: Int64(energy))
+            }
+            for ts in timestamps {
+                try SystemBucket(timestamp: ts, bucketName: "cpu", energyNJ: 2).insert(db)
+            }
+        }
+        let history = try makeHistory()
+        let now = Date(timeIntervalSince1970: Double(anchor) / 1000)
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                         timebase: LegacyTimebase(numer: 1, denom: 1),
+                                         now: { now }).start().value
+
+        let before = try await legacyTierEnergy(history)
+        XCTAssertEqual(before.appMinutes, 42)
+        XCTAssertEqual(before.appHours, 53)
+        XCTAssertEqual(before.bucketMinutes, 8)
+        XCTAssertEqual(before.bucketHours, 10)
+
+        try await history.runMaintenance(now: now)
+        let after = try await legacyTierEnergy(history)
+        XCTAssertEqual(after.appMinutes, before.appMinutes, "the 7-day boundary minute must keep its imported total")
+        XCTAssertEqual(after.bucketMinutes, before.bucketMinutes, "the 7-day boundary bucket minute must keep its imported total")
+        XCTAssertEqual(after.appHours, before.appHours, "the 30-day boundary hour must keep its imported total")
+        XCTAssertEqual(after.bucketHours, before.bucketHours, "the 30-day boundary bucket hour must keep its imported total")
+        withExtendedLifetime(writer) {}
+    }
+
+    func testInterruptedBoundaryCursorResumesAndReReadsTheOpenHour() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 2)
+        let base: Int64 = 1_700_000_000_000
+        let day: Int64 = 86_400_000
+        let hour: Int64 = 3_600_000
+        let maxTimestamp = base + day + 12 * hour + 3_000
+        let boundaryHour = maxTimestamp / hour
+        let history = try makeHistory()
+        let box = ImportTaskBox()
+        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                              timebase: LegacyTimebase(numer: 1, denom: 1),
+                                              progress: { progress in
+            if progress.importedHours == progress.totalHours { box.cancel() }
+        })
+        let task = importer.start()
+        box.set(task)
+        do {
+            try await task.value
+            XCTFail("cancellation after the boundary hour should interrupt the pass")
+        } catch is CancellationError {
+            // The boundary hour committed its rows and its cursor together.
+        }
+        let cursor = try await history.dbPool.read { db in
+            try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key='legacy.cursorHour'")
+        }
+        XCTAssertEqual(cursor, boundaryHour - 1, "the open-hour cursor must be stored as hour - 1 with its rows")
+
+        // A row lands in the still-open hour after the interrupted pass.
+        // Resuming must re-read that hour instead of starting past it.
+        let newTimestamp = maxTimestamp + 1
+        let writer = try DatabaseQueue(path: legacyURL.path)
+        try await writer.write { db in
+            try Self.insertEnergy(db, timestamp: newTimestamp, energyNJ: 500)
+        }
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                         timebase: LegacyTimebase(numer: 1, denom: 1)).run()
+        let result = try await history.dbPool.read { db -> (String, Int64, Int) in
+            (
+                try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'") ?? "",
+                try Int64.fetchOne(db, sql: "SELECT COALESCE(SUM(energyNJ),0) FROM AppUsageHour WHERE metricVersion=0") ?? 0,
+                try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0 AND energyNJ = 500") ?? 0
+            )
+        }
+        XCTAssertEqual(result.0, "done")
+        XCTAssertEqual(result.1, 908, "the resumed pass must re-read the open hour and include the new row")
+        XCTAssertEqual(result.2, 1)
+        withExtendedLifetime(writer) {}
+    }
+
+    private struct LegacyTierEnergy {
+        let appMinutes: Int64
+        let appHours: Int64
+        let bucketMinutes: Int64
+        let bucketHours: Int64
+    }
+
+    private func legacyTierEnergy(_ history: HistoryDatabase) async throws -> LegacyTierEnergy {
+        try await history.dbPool.read { db in
+            LegacyTierEnergy(
+                appMinutes: try Int64.fetchOne(db, sql: "SELECT COALESCE(SUM(energyNJ),0) FROM AppUsageMinute WHERE metricVersion=0") ?? 0,
+                appHours: try Int64.fetchOne(db, sql: "SELECT COALESCE(SUM(energyNJ),0) FROM AppUsageHour WHERE metricVersion=0") ?? 0,
+                bucketMinutes: try Int64.fetchOne(db, sql: "SELECT COALESCE(SUM(energyNJ),0) FROM BucketMinute WHERE metricVersion=0") ?? 0,
+                bucketHours: try Int64.fetchOne(db, sql: "SELECT COALESCE(SUM(energyNJ),0) FROM BucketHour WHERE metricVersion=0") ?? 0
+            )
+        }
+    }
+
+    private static func insertEnergy(_ db: Database, timestamp: Int64, energyNJ: Int64) throws {
+        var sample = EnergySample(timestamp: timestamp, pid: 700, bundleIdentifier: "com.test.boundary",
+                                  processName: "Boundary", path: nil, parentPid: nil,
+                                  cpuUserNs: 1, cpuSystemNs: 1, energyNJ: energyNJ,
+                                  wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0,
+                                  year: 2023, month: 11, day: 14, hour: 12, minute: 0)
+        try sample.insert(db)
+    }
+
     func testCancelledWaiterLeavesRunLockQueueAndNeverStartsImport() async throws {
         let dir = try directory()
         let legacyURL = dir.appendingPathComponent("db.sqlite")

@@ -116,20 +116,42 @@ public extension HistoryDatabase {
         try await dbPool.write { db in
             let watermark = try Self.watermark(db, key: "rollup.minuteWatermark")
             guard upperBound > watermark + 1 else { return }
+            // Current-version rows are recomputed from raw and replaced. Legacy
+            // (version 0) rows are only filled in where absent: the importer
+            // aggregated them over a window wider than raw retention, so
+            // recomputing a minute that straddles the raw cutoff from the raw
+            // subset alone would drop energy that exists only in the imported
+            // minute.
             try db.execute(sql: """
                 INSERT OR REPLACE INTO AppUsageMinute
                     (minute, appId, metricVersion, energyNJ, cpuNs, wakeups, diskReadBytes, diskWriteBytes, samples)
                 SELECT ts / 60000, appId, metricVersion, SUM(energyNJ), SUM(cpuNs), SUM(wakeups),
                        SUM(diskReadBytes), SUM(diskWriteBytes), COUNT(*)
                 FROM AppSampleRaw
-                WHERE ts / 60000 > ? AND ts / 60000 < ?
+                WHERE ts / 60000 > ? AND ts / 60000 < ? AND metricVersion <> 0
+                GROUP BY ts / 60000, appId, metricVersion
+                """, arguments: [watermark, upperBound])
+            try db.execute(sql: """
+                INSERT OR IGNORE INTO AppUsageMinute
+                    (minute, appId, metricVersion, energyNJ, cpuNs, wakeups, diskReadBytes, diskWriteBytes, samples)
+                SELECT ts / 60000, appId, metricVersion, SUM(energyNJ), SUM(cpuNs), SUM(wakeups),
+                       SUM(diskReadBytes), SUM(diskWriteBytes), COUNT(*)
+                FROM AppSampleRaw
+                WHERE ts / 60000 > ? AND ts / 60000 < ? AND metricVersion = 0
                 GROUP BY ts / 60000, appId, metricVersion
                 """, arguments: [watermark, upperBound])
             try db.execute(sql: """
                 INSERT OR REPLACE INTO BucketMinute (minute, bucketId, metricVersion, energyNJ)
                 SELECT ts / 60000, bucketId, metricVersion, SUM(energyNJ)
                 FROM BucketSampleRaw
-                WHERE ts / 60000 > ? AND ts / 60000 < ?
+                WHERE ts / 60000 > ? AND ts / 60000 < ? AND metricVersion <> 0
+                GROUP BY ts / 60000, bucketId, metricVersion
+                """, arguments: [watermark, upperBound])
+            try db.execute(sql: """
+                INSERT OR IGNORE INTO BucketMinute (minute, bucketId, metricVersion, energyNJ)
+                SELECT ts / 60000, bucketId, metricVersion, SUM(energyNJ)
+                FROM BucketSampleRaw
+                WHERE ts / 60000 > ? AND ts / 60000 < ? AND metricVersion = 0
                 GROUP BY ts / 60000, bucketId, metricVersion
                 """, arguments: [watermark, upperBound])
             try Self.setWatermark(db, key: "rollup.minuteWatermark", value: upperBound - 1)
@@ -144,20 +166,40 @@ public extension HistoryDatabase {
             let hourWatermark = try Self.watermark(db, key: "rollup.hourWatermark")
             let upperBound = min(currentHour, minuteWatermark / 60)
             guard upperBound > hourWatermark + 1 else { return }
+            // Same version rule as the minute rollup: legacy hours are kept
+            // once the importer wrote them, because the hour that straddles
+            // the minute-retention cutoff would otherwise be rebuilt from the
+            // surviving minutes alone.
             try db.execute(sql: """
                 INSERT OR REPLACE INTO AppUsageHour
                     (hour, appId, metricVersion, energyNJ, cpuNs, wakeups, diskReadBytes, diskWriteBytes, samples)
                 SELECT minute / 60, appId, metricVersion, SUM(energyNJ), SUM(cpuNs), SUM(wakeups),
                        SUM(diskReadBytes), SUM(diskWriteBytes), SUM(samples)
                 FROM AppUsageMinute
-                WHERE minute / 60 > ? AND minute / 60 < ?
+                WHERE minute / 60 > ? AND minute / 60 < ? AND metricVersion <> 0
+                GROUP BY minute / 60, appId, metricVersion
+                """, arguments: [hourWatermark, upperBound])
+            try db.execute(sql: """
+                INSERT OR IGNORE INTO AppUsageHour
+                    (hour, appId, metricVersion, energyNJ, cpuNs, wakeups, diskReadBytes, diskWriteBytes, samples)
+                SELECT minute / 60, appId, metricVersion, SUM(energyNJ), SUM(cpuNs), SUM(wakeups),
+                       SUM(diskReadBytes), SUM(diskWriteBytes), SUM(samples)
+                FROM AppUsageMinute
+                WHERE minute / 60 > ? AND minute / 60 < ? AND metricVersion = 0
                 GROUP BY minute / 60, appId, metricVersion
                 """, arguments: [hourWatermark, upperBound])
             try db.execute(sql: """
                 INSERT OR REPLACE INTO BucketHour (hour, bucketId, metricVersion, energyNJ)
                 SELECT minute / 60, bucketId, metricVersion, SUM(energyNJ)
                 FROM BucketMinute
-                WHERE minute / 60 > ? AND minute / 60 < ?
+                WHERE minute / 60 > ? AND minute / 60 < ? AND metricVersion <> 0
+                GROUP BY minute / 60, bucketId, metricVersion
+                """, arguments: [hourWatermark, upperBound])
+            try db.execute(sql: """
+                INSERT OR IGNORE INTO BucketHour (hour, bucketId, metricVersion, energyNJ)
+                SELECT minute / 60, bucketId, metricVersion, SUM(energyNJ)
+                FROM BucketMinute
+                WHERE minute / 60 > ? AND minute / 60 < ? AND metricVersion = 0
                 GROUP BY minute / 60, bucketId, metricVersion
                 """, arguments: [hourWatermark, upperBound])
             try db.execute(sql: """
