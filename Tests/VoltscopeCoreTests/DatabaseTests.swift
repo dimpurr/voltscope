@@ -114,8 +114,39 @@ final class ProcessSamplerTests: XCTestCase {
         // Give the system a moment to accumulate something measurable.
         try await Task.sleep(nanoseconds: 200_000_000)
         let second = sampler.sampleAll()
-        // Every emitted row must carry positive energy by the sampler contract.
-        XCTAssertTrue(second.samples.allSatisfy { $0.energyNJ > 0 })
+        XCTAssertTrue(
+            samplesMatchExpectedActivity(second.samples, energyAvailable: sampler.energyAvailable),
+            "second sample should report activity using the metrics available on this Mac"
+        )
+    }
+
+    func testSampleActivityExpectationRejectsEmptyResultsAndAcceptsEachPlatform() {
+        let baseline = snapshot(energy: 1_000, cpuUser: 100, cpuSystem: 50)
+        let energySample = delta(baseline, snapshot(energy: 1_001, cpuUser: 200, cpuSystem: 75))!
+        let cpuSample = delta(
+            baseline,
+            snapshot(energy: 1_000, cpuUser: 200, cpuSystem: 75),
+            energyAvailable: false
+        )!
+
+        XCTAssertFalse(samplesMatchExpectedActivity([], energyAvailable: true))
+        XCTAssertFalse(samplesMatchExpectedActivity([], energyAvailable: false))
+        XCTAssertTrue(samplesMatchExpectedActivity([energySample], energyAvailable: true))
+        XCTAssertTrue(samplesMatchExpectedActivity([cpuSample], energyAvailable: false))
+        XCTAssertFalse(samplesMatchExpectedActivity([cpuSample], energyAvailable: true))
+        XCTAssertFalse(samplesMatchExpectedActivity([energySample], energyAvailable: false))
+    }
+
+    private func samplesMatchExpectedActivity(_ samples: [EnergySample], energyAvailable: Bool) -> Bool {
+        guard !samples.isEmpty else { return false }
+        if energyAvailable {
+            // Apple Silicon reports per-process DPE energy.
+            return samples.allSatisfy { $0.energyNJ > 0 }
+        }
+        // Intel reports CPU activity without per-process DPE energy.
+        return samples.allSatisfy {
+            $0.energyNJ == 0 && ($0.cpuUserNs > 0 || $0.cpuSystemNs > 0)
+        }
     }
 
     private func snapshot(
