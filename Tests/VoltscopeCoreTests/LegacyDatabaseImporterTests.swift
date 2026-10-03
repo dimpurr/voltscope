@@ -1196,6 +1196,159 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         XCTAssertEqual(retriedStatus.state, .failed)
     }
 
+    func testTruncatedAndInvalidPageSourcesFailWithoutSchedulingDeletion() async throws {
+        for corruptPage in [false, true] {
+            let dir = try directory()
+            let legacyURL = dir.appendingPathComponent("db.sqlite")
+            try makeLegacy(at: legacyURL, days: 1)
+            if corruptPage {
+                try Data(repeating: 0xA5, count: 4096).write(to: legacyURL)
+            } else {
+                let data = try Data(contentsOf: legacyURL)
+                try data.prefix(max(32, data.count / 2)).write(to: legacyURL)
+            }
+            let history = try makeHistory()
+            do {
+                try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                                 timebase: LegacyTimebase(numer: 1, denom: 1)).run()
+                XCTFail("a damaged source must fail preflight or reading")
+            } catch { }
+            let status = try await history.importStatus()
+            XCTAssertEqual(status.state, .failed)
+            XCTAssertTrue(status.error?.isEmpty == false)
+            XCTAssertNil(status.deleteAfter)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: legacyURL.path))
+        }
+    }
+
+    func testMissingLegacyColumnPersistsVisibleFailureWithoutDeletionDeadline() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        let writer = try DatabaseQueue(path: legacyURL.path)
+        try await writer.write { db in try db.execute(sql: "ALTER TABLE EnergyHistory DROP COLUMN cpuSystemNs") }
+        let history = try makeHistory()
+        do {
+            try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                             timebase: LegacyTimebase(numer: 1, denom: 1)).run()
+            XCTFail("a legacy schema missing a required column must fail")
+        } catch { }
+        let status = try await history.importStatus()
+        XCTAssertEqual(status.state, .failed)
+        XCTAssertTrue(status.error?.contains("cpuSystemNs") == true)
+        XCTAssertNil(status.deleteAfter)
+    }
+
+    func testWriteFailureCanResumeAndConvergeWithNewWALRowWithoutDuplicates() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        let history = try makeHistory()
+        try await history.dbPool.write { db in
+            try db.execute(sql: """
+                CREATE TRIGGER inject_import_failure BEFORE INSERT ON AppUsageHour
+                BEGIN SELECT RAISE(ABORT, 'injected destination write failure'); END
+                """)
+        }
+        do {
+            try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                             timebase: LegacyTimebase(numer: 1, denom: 1)).run()
+            XCTFail("the injected destination write failure should escape")
+        } catch { }
+        let failed = try await history.importStatus()
+        XCTAssertEqual(failed.state, .failed)
+        XCTAssertTrue(failed.error?.contains("injected destination write failure") == true)
+        XCTAssertNil(failed.deleteAfter)
+
+        try await history.dbPool.write { db in try db.execute(sql: "DROP TRIGGER inject_import_failure") }
+        let writer = try makeWALWriter(at: legacyURL)
+        let lateWriter = LegacyLateWriter(writer: writer, base: 1_700_043_200_000)
+        let inserted = LockedFlag()
+        let fixtureNow = legacyFixtureNow(days: 1)
+        let resumed = LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                             timebase: LegacyTimebase(numer: 1, denom: 1),
+                                             now: { fixtureNow },
+                                             progress: { progress in
+            if progress.importedHours == 1 && inserted.trySet() {
+                lateWriter.commitNextHour(energyNJ: 1_001)
+            }
+        })
+        try await resumed.run()
+        XCTAssertNil(lateWriter.lastError)
+        XCTAssertEqual(lateWriter.inserted, 1)
+        let result = try await history.dbPool.read { db in
+            (try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'"),
+             try Int64.fetchOne(db, sql: "SELECT SUM(energyNJ) FROM AppUsageHour WHERE metricVersion=0") ?? 0,
+             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0") ?? 0,
+             try Int64.fetchOne(db, sql: "SELECT SUM(energyNJ) FROM AppSampleRaw WHERE metricVersion=0") ?? 0)
+        }
+        XCTAssertEqual(result.0, "done")
+        XCTAssertEqual(result.1, 1_204)
+        XCTAssertEqual(result.2, 3)
+        XCTAssertEqual(result.3, 1_204)
+    }
+
+    func testReadOnlyDestinationWriteFailureDoesNotMarkDoneOrSetDeletionDeadline() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        let writable = try makeHistory()
+        let destinationURL = try XCTUnwrap(writable.fileURL)
+        var configuration = Configuration()
+        configuration.readonly = true
+        let readOnlyPool = try DatabasePool(path: destinationURL.path, configuration: configuration)
+        let readOnlyHistory = try HistoryDatabase(dbPool: readOnlyPool, fileURL: destinationURL)
+        do {
+            try await LegacyDatabaseImporter(history: readOnlyHistory, legacyURL: legacyURL,
+                                             timebase: LegacyTimebase(numer: 1, denom: 1)).run()
+            XCTFail("a read-only destination must reject import writes")
+        } catch { }
+        let status = try await readOnlyHistory.importStatus()
+        XCTAssertNotEqual(status.state, .done)
+        XCTAssertNil(status.deleteAfter)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyURL.path))
+    }
+
+    func testCompletedImportStaysDoneWhenUserAlreadyRemovedLegacySource() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        let history = try makeHistory()
+        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                               timebase: LegacyTimebase(numer: 1, denom: 1))
+        try await importer.run()
+        try FileManager.default.removeItem(at: legacyURL)
+        try await importer.run()
+        let status = try await history.importStatus()
+        XCTAssertEqual(status.state, .done)
+        XCTAssertNil(status.error)
+        XCTAssertNotNil(status.deleteAfter)
+    }
+
+    func testExpiredDeletionRevalidatesDestinationBeforeRemovingLegacySource() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        let history = try makeHistory()
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                         timebase: LegacyTimebase(numer: 1, denom: 1)).run()
+        try await history.dbPool.write { db in
+            try db.execute(sql: "DELETE FROM AppUsageHour WHERE metricVersion=0")
+            try db.execute(sql: "UPDATE Meta SET value='0' WHERE key='legacy.deleteAfter'")
+        }
+        do {
+            _ = try await history.deleteLegacyDatabaseIfExpired(at: legacyURL, now: Date())
+            XCTFail("an inconsistent completed import must preserve the source for recovery")
+        } catch let error as LegacyImportError {
+            guard case .verificationFailed = error else { return XCTFail("unexpected error: \(error)") }
+        }
+        let status = try await history.importStatus()
+        XCTAssertEqual(status.state, .failed)
+        XCTAssertTrue(status.error?.isEmpty == false)
+        XCTAssertNil(status.deleteAfter)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyURL.path))
+    }
+
     func testReadOnlyPerformanceImportWhenExplicitlyConfigured() async throws {
         guard let sourcePath = ProcessInfo.processInfo.environment["VOLTSCOPE_LEGACY_BENCHMARK_SOURCE"] else {
             throw XCTSkip("Set VOLTSCOPE_LEGACY_BENCHMARK_SOURCE to run the full-database benchmark.")

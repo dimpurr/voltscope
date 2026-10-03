@@ -211,6 +211,12 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
     private func performRun() async throws {
         do {
             guard timebase.numer > 0, timebase.denom > 0 else { throw LegacyImportError.invalidTimebase }
+            let savedState = try await meta("legacy.state")
+            // The source is intentionally retained only until the user removes
+            // it or the retention deadline passes. A completed import remains
+            // complete when that file has already been removed.
+            if savedState == LegacyImportState.done.rawValue,
+               !FileManager.default.fileExists(atPath: legacyURL.path) { return }
             guard FileManager.default.fileExists(atPath: legacyURL.path) else { throw CocoaError(.fileNoSuchFile) }
 
             var configuration = Configuration()
@@ -226,8 +232,10 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
             guard let initialBounds = try Self.readBounds(source) else {
                 throw LegacyImportError.emptyLegacyEnergyHistory
             }
-            let savedState = try await meta("legacy.state")
-            if savedState == LegacyImportState.done.rawValue { return }
+            if savedState == LegacyImportState.done.rawValue {
+                try await verifyCompletedImport(source: source, bounds: initialBounds)
+                return
+            }
             if savedState == nil || savedState == LegacyImportState.none.rawValue || savedState == LegacyImportState.failed.rawValue {
                 try await setMeta("legacy.state", value: LegacyImportState.pending.rawValue)
             }
@@ -240,8 +248,28 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
             try await history.dbPool.write { db in
                 try Self.putMeta(db, key: "legacy.state", value: LegacyImportState.failed.rawValue)
                 try Self.putMeta(db, key: "legacy.error", value: error.localizedDescription)
+                try db.execute(sql: "DELETE FROM Meta WHERE key IN ('legacy.doneAt', 'legacy.deleteAfter')")
             }
             throw error
+        }
+    }
+
+    /// Recheck a completed import before the retained source is deleted.
+    /// The raw tier is compared only inside its current retention window;
+    /// permanent hourly totals and copied sampler row counts are checked in
+    /// full by the shared verifier.
+    private func verifyCompletedImport(source: DatabaseQueue, bounds: LegacyBounds) async throws {
+        let anchor = try await meta("legacy.windowAnchor").flatMap(Int64.init) ?? bounds.latestTimestamp
+        let anchoredCutoff = Self.windowStart(anchor - Int64(rawRetentionDays) * 86_400_000)
+        let currentCutoff = Self.windowStart(Int64(now().timeIntervalSince1970 * 1000)
+            - Int64(rawRetentionDays) * 86_400_000)
+        let rawCutoff = max(anchoredCutoff, currentCutoff)
+        let upperBound = bounds.latestTimestamp &+ 1
+        let totals = try Self.sourceRead(source) { src in
+            try Self.readVerificationTotals(src, rawCutoff: rawCutoff, upperBound: upperBound)
+        }
+        try await history.dbPool.read { dst in
+            try Self.verify(totals, rawCutoff: rawCutoff, upperBound: upperBound, dst)
         }
     }
 
@@ -702,6 +730,16 @@ public extension HistoryDatabase {
             return false
         }
         guard Int64(now.timeIntervalSince1970 * 1000) >= deleteAfter else { return false }
+        // Revalidate while the source still exists. A post-import corruption
+        // or destination loss must leave the only recovery copy untouched.
+        let state = try await importStatus().state
+        let hasCompletionRecord = try await dbPool.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.doneAt'") != nil
+        }
+        if state == .done, hasCompletionRecord, FileManager.default.fileExists(atPath: legacyURL.path) {
+            try await LegacyDatabaseImporter(history: self, legacyURL: legacyURL,
+                                             rawRetentionDays: try await rawRetentionDays()).run()
+        }
         try await deleteLegacyDatabase(at: legacyURL, requireExpiry: true, now: now)
         return true
     }
