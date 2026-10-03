@@ -24,3 +24,20 @@ jobs:
         # the package in Swift 5 compatibility mode until that dependency is
         # annotated upstream.
         run: swift test -Xswiftc -swift-version -Xswiftc 5
+
+  test-intel:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Swift toolchain
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: '6.1'
+      - name: Check documentation consistency
+        run: python3 scripts/check-docs.py
+      - name: Test documentation checker
+        run: python3 scripts/test-check-docs.py
+      - name: Run tests
+        # Match the arm64 job's Swift 5 compatibility mode while disabling
+        # keychain credential lookup in the non-interactive runner.
+        run: swift test --disable-keychain -Xswiftc -swift-version -Xswiftc 5
