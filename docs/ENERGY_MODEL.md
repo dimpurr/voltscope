@@ -58,7 +58,7 @@ unattributed energy instead of silently turning an estimate into a measurement.
 | Total drain (V × A) | `IOPSCopyPowerSourcesInfo`, `IOPSGetProvidingPowerSourceType` | **Public** | No | No (system) |
 | Per-PID CPU energy | `proc_pid_rusage(RUSAGE_INFO_V6).ri_energy_nj` | **Public** | No | **Yes** ✓ |
 | Per-PID wakeups, QoS | `task_info(TASK_POWER_INFO)`; also in `rusage_info_v6` | **Public** | No | **Yes** |
-| System component energy buckets — CPU-P / CPU-E / GPU / ANE / DRAM / Display / Fabric | **IOReport** framework — groups: `Energy Model`, `CPU Stats`, `GPU Stats`; channels: `PMP`, `DISP`/`DISPEXT`, `ANE`, `DCS`, `AMCC` | Private but no entitlement, no root, callable from user code via `dlopen` | **No** | No (system per bucket) |
+| System component energy buckets — CPU-P / CPU-E / GPU / ANE / DRAM / Display / Fabric | `IOReportHub` via `IOConnect` (IOKit); reads `Energy Model` channels | Private, no root | **No** | No (system per bucket) |
 | Display backlight power (M1–M4) | SMC key `PDBR` | Private but stable | No | No |
 | Display backlight power (M5+) | SMC key `PBwo` | Private | No | No |
 | Wi-Fi radio power | SMC key `wiPm`, IOReport `WiFi` | Private | No | No |
@@ -142,11 +142,17 @@ The "iOS Battery" stacked view always shows an explicit **Other / Untracked** we
 
 ---
 
-## 5b. macOS 26 (Tahoe) IOReport.framework removal — implementation pivot
+## 5b. Historical: v0.6/v0.6.1 IOReport implementation pivot
 
-While prototyping v0.6 on macOS 26.3.1 we discovered that **`IOReport.framework` is no longer present** on disk and **no longer in the dyld shared cache**. Every dlopen variant fails with `not in dyld cache`. The implementation therefore uses the kernel-facing IOConnect path on systems where the wrapper is unavailable.
+This section records the implementation transition during v0.6 and v0.6.1; its
+future-tense plans and version-specific paths are historical. The current
+sampler uses `IOReportHub` via `IOConnect` on all supported macOS versions, as
+documented in the [current sampler contract](#current-sampler-metric-contract)
+and implemented by `BucketSampler` and `IOReportConnectSampler`.
 
-**What still works on macOS 26 (verified in-tree):**
+While prototyping v0.6 on macOS 26.3.1 we discovered that **`IOReport.framework` is no longer present** on disk and **no longer in the dyld shared cache**. Every dlopen variant failed with `not in dyld cache`. The v0.6.1 implementation therefore moved to the kernel-facing IOConnect path; the former framework path is no longer used on older supported systems either.
+
+**What worked on macOS 26 in the v0.6.1 implementation record (verified in-tree):**
 
 | Component | Status |
 |---|---|
@@ -158,7 +164,7 @@ While prototyping v0.6 on macOS 26.3.1 we discovered that **`IOReport.framework`
 | `powermetrics` binary | ✅ Still ships at `/usr/bin/powermetrics`, still requires root |
 | `PowerLog.framework` | ✅ Auto-loaded into every Swift process — symbols undocumented |
 
-**What's gone:**
+**What was absent on macOS 26 during that investigation:**
 
 | Component | Status on macOS 26 |
 |---|---|
@@ -166,11 +172,11 @@ While prototyping v0.6 on macOS 26.3.1 we discovered that **`IOReport.framework`
 | `IOReportCopyChannelsInGroup`, `IOReportCreateSubscription`, `IOReportSimpleGetIntegerValue`, `IOReportIterate` (the user-space wrappers) | ❌ Cannot be loaded by dlopen |
 | Any new public replacement framework (EnergyKit, PowerKit, …) | ❌ None added in macOS 26.0–26.3 |
 
-### The path forward — direct IOConnect
+### v0.6.1 implementation transition — direct IOConnect
 
 The framework was a thin user-space wrapper around an `IOReportHub` user client. The kernel mechanism is intact. Detailed protocol notes and exploratory measurements remain in the private maintainer archive.
 
-The replacement architecture for macOS 26+:
+The replacement architecture introduced in v0.6.1:
 
 1. **`IOServiceMatching("IOReportHub")` → `IOServiceOpen` → `io_connect_t`**
 2. **`IOConnectCallStructMethod` with documented selectors:**
@@ -180,7 +186,7 @@ The replacement architecture for macOS 26+:
 3. **`IOConnectMapMemory` to get the kernel sample buffer**
 4. **Decode `IOReportChannel` / `IOReportChannelType` structs** (layouts in IOReport_decompile + Apple's open-source XNU)
 
-Estimated effort: **1–2 weeks** to ship a stable subset (CPU/GPU/ANE/DRAM), gated to macOS 26+ at runtime; macOS 13–15 keeps using the existing `IOReport.framework` dlopen path.
+The original plan was to gate this path to macOS 26+ and retain the framework path on macOS 13–15. That split was superseded: the current sampler uses this IOConnect path on every supported macOS version.
 
 ### Design consequences
 
@@ -189,11 +195,11 @@ Estimated effort: **1–2 weeks** to ship a stable subset (CPU/GPU/ANE/DRAM), ga
 - A helper remains an optional refinement for true per-PID GPU time; it is not
   required for the default history view.
 
-### v0.6 ship plan (delivered)
+### Historical v0.6/v0.6.1 release record
 
-- v0.6 shipped: WAL fix, ⚡ W status bar, V × I total drain, Energy breakdown UI section, IOReport.framework path (works on macOS 13–15; falls through to v0.6.1's IOConnect path on macOS 26+).
+- v0.6 shipped: WAL fix, ⚡ W status bar, V × I total drain, Energy breakdown UI section, and the original IOReport.framework path. That framework path was later removed from the sampler on all supported macOS versions.
 - **v0.6.1 shipped**: direct IOConnect path against `IOReportHub`. Bypasses the missing `IOReport.framework` entirely. Verified end-to-end on macOS 26.3.1 / Apple Silicon M3 — 149 Energy Model channels enumerated, real per-channel cumulative joule counters returned.
-- v0.7 ships apportionment as originally planned.
+- v0.7 was planned to ship apportionment as originally designed.
 
 ### v0.6.1 implementation record
 
@@ -228,14 +234,14 @@ bucket.
 | Version | Headline change | Scope |
 |---|---|---|
 | **v0.5.x** (shipped) | CPU per-app history with `proc_pid_rusage` | Stable. The CPU layer of the future architecture. |
-| **v0.6** "Bucket honest (foundation)" | + WAL checkpoint storage fix <br> + V × I total-drain top line (⚡ W in status bar) <br> + Energy breakdown UI section + DB schema <br> + IOReport.framework dlopen path (works on macOS 13–15; gracefully reports unavailable on macOS 26+ per §5b) | Foundation ships with the bucket UI in place; bucket data populates on systems where the framework still loads. macOS 26+ users see the honest "working on it" notice. |
-| **v0.6.1** "macOS 26 buckets" ✅ | + Direct IOConnect bucket sampler against `IOReportHub` (no framework dependency, no root). Verified end-to-end on macOS 26.3.1 M3. | Restores bucket data on macOS 26+. Both paths shipped: framework on macOS 13–15, IOConnect everywhere else. See §5b. |
+| **v0.6** "Bucket honest (foundation)" | + WAL checkpoint storage fix <br> + V × I total-drain top line (⚡ W in status bar) <br> + Energy breakdown UI section + DB schema <br> + Original IOReport.framework dlopen path | Historical release record: the framework path was subsequently removed from the sampler on all supported macOS versions. |
+| **v0.6.1** "macOS 26 buckets" ✅ | + Direct IOConnect bucket sampler against `IOReportHub` (no framework dependency, no root). Verified end-to-end on macOS 26.3.1 M3. | Historical release record: this implementation transition established the IOConnect sampler, which now runs on all supported macOS versions. See §5b. |
 | **Future v0.7+** "iOS Battery for macOS" | + `NStatManager` per-PID network <br> + `NSWorkspace` foreground-time tracker <br> + Apportionment engine writing `AppEnergyAttribution` <br> + New default panel mode: stacked pie / bar where percentages sum to 100 % of metered drain | Planned; not part of the v0.7.2 contract. |
 | **v1.0** "Privileged helper" | + `SMAppService` helper running `powermetrics` for per-PID GPU ms/s <br> + Notarised, Developer-ID-signed release with Sparkle keys | GPU bucket gets real per-PID apportionment instead of CPU-share proxy. Helper is opt-in; v0.7 still works without it. |
 | **v1.5** | Anomaly detection on bucket-attributed energy (per-app baseline ± 3σ) | Builds on v0.7's apportioned per-app values, not raw CPU. |
 | **v2.0** | Tail-energy radio model; sleep-period drilldown; PDF/PNG export | Refinements per VISION. |
 
-The original HLD planned `SystemPower` table and `SMAppService` helper for v1.0. v0.6 effectively **brings the system bucket measurement forward and removes its root requirement** by routing through IOReport instead of `powermetrics`. The helper still buys per-PID GPU but is no longer the gating dependency for the system-bucket view.
+The original HLD planned a `SystemPower` table and `SMAppService` helper for v1.0. The v0.6/v0.6.1 release history records how system bucket measurement shipped without root through `IOReportHub` via `IOConnect`; the optional helper remains a planned per-PID GPU refinement, not a dependency for system buckets.
 
 ---
 

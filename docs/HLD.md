@@ -328,7 +328,7 @@ grow slowly.
 | Bundle identifiers | `NSWorkspace.runningApplications` | None | Yes |
 | System sleep/wake events | `NSWorkspace` notifications | None | Yes |
 | Launch at login | `SMAppService.mainApp` | None | Yes |
-| Current system hardware energy buckets | IOReport framework on macOS 13–15; IOReportHub through `IOConnect` on macOS 26+ | No root; private system interface | No (private API) |
+| Current system hardware energy buckets | `IOReportHub` via `IOConnect` on all supported macOS versions | No root; private system interface | No (private API) |
 | Planned per-PID GPU time refinement | `powermetrics --show-process-gpu` helper | **Root** | No |
 
 Voltscope ships outside the App Store (Developer ID + notarization) because the per-process sampling does not survive the sandbox's `proc_listallpids` restrictions for other-UID processes. The optional, planned `powermetrics` helper also requires root, which is App Store–prohibited.
