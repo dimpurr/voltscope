@@ -43,47 +43,25 @@ final class DatabaseTests: XCTestCase {
     }
 
     func testTopAppsQueryReturnsOrderedResults() async throws {
-        let db = try AppDatabase.makeInMemory()
+        let db = try HistoryDatabase.makeInMemory()
         let now = Int64(Date().timeIntervalSince1970 * 1000)
-        let samples = [
-            EnergySample(timestamp: now - 1000, pid: 1, processName: "Heavy",
-                         cpuUserNs: 0, cpuSystemNs: 0, energyNJ: 5_000_000_000,
-                         wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0,
-                         year: 2025, month: 1, day: 1, hour: 0, minute: 0),
-            EnergySample(timestamp: now - 500, pid: 2, processName: "Light",
-                         cpuUserNs: 0, cpuSystemNs: 0, energyNJ: 1_000,
-                         wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0,
-                         year: 2025, month: 1, day: 1, hour: 0, minute: 0)
-        ]
-        try await db.writeBatchSamples(samples)
+        try await db.writeTick(timestamp: now, apps: [
+            SampledApp(groupKey: "heavy", displayName: "Heavy", pid: 1, energyNJ: 5_000_000_000, cpuNs: 1),
+            SampledApp(groupKey: "light", displayName: "Light", pid: 2, energyNJ: 1_000, cpuNs: 1)
+        ], buckets: [], coverage: SampleCoverage(visible: 2, unreadable: 0))
         let top = try await db.topApps(sinceMinutes: 60, limit: 5)
         XCTAssertEqual(top.first?.processName, "Heavy")
     }
 
     func testTopAppsCollapsesByBundleIdentifier() async throws {
         // Two helper rows with the same bundle identifier should collapse into one TopAppEnergy.
-        let db = try AppDatabase.makeInMemory()
+        let db = try HistoryDatabase.makeInMemory()
         let now = Int64(Date().timeIntervalSince1970 * 1000)
-        let samples = [
-            EnergySample(timestamp: now - 100, pid: 10,
-                         bundleIdentifier: "com.google.Chrome",
-                         processName: "Chrome",
-                         cpuUserNs: 0, cpuSystemNs: 0, energyNJ: 2_000_000,
-                         wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0,
-                         year: 2025, month: 1, day: 1, hour: 0, minute: 0),
-            EnergySample(timestamp: now - 50, pid: 11,
-                         bundleIdentifier: "com.google.Chrome",
-                         processName: "Chrome Helper",
-                         cpuUserNs: 0, cpuSystemNs: 0, energyNJ: 3_000_000,
-                         wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0,
-                         year: 2025, month: 1, day: 1, hour: 0, minute: 0),
-            EnergySample(timestamp: now - 25, pid: 12,
-                         processName: "loginwindow",
-                         cpuUserNs: 0, cpuSystemNs: 0, energyNJ: 500,
-                         wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0,
-                         year: 2025, month: 1, day: 1, hour: 0, minute: 0)
-        ]
-        try await db.writeBatchSamples(samples)
+        try await db.writeTick(timestamp: now, apps: [
+            SampledApp(groupKey: "com.google.Chrome", bundleIdentifier: "com.google.Chrome", displayName: "Chrome", pid: 10, energyNJ: 2_000_000, cpuNs: 1),
+            SampledApp(groupKey: "com.google.Chrome", bundleIdentifier: "com.google.Chrome", displayName: "Chrome Helper", pid: 11, energyNJ: 3_000_000, cpuNs: 1),
+            SampledApp(groupKey: "loginwindow", displayName: "loginwindow", pid: 12, energyNJ: 500, cpuNs: 1)
+        ], buckets: [], coverage: SampleCoverage(visible: 3, unreadable: 0))
         let top = try await db.topApps(sinceMinutes: 60, limit: 5)
         // 2 distinct groups: Chrome (collapsed), loginwindow.
         XCTAssertEqual(top.count, 2)

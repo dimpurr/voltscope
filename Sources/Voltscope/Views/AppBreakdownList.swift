@@ -2,10 +2,11 @@ import SwiftUI
 import VoltscopeCore
 
 struct AppBreakdownList: View {
-    let entries: [AppDatabase.AppBreakdownEntry]
+    let entries: [HistoryDatabase.AppBreakdownEntry]
     /// Precomputed sparklines for every recorded app in the selected toolbar range.
     let sparklines: [String: [SparkPoint]]
     let groupSystem: Bool
+    let energyAvailable: Bool
 
     var body: some View {
         // No internal ScrollView — HistoryWindow wraps the whole panel in a
@@ -23,7 +24,8 @@ struct AppBreakdownList: View {
                     entry: entry,
                     sparkline: sparklines[entry.id] ?? [],
                     totalAll: totalEnergyNJ,
-                    muted: false
+                    muted: false,
+                    energyAvailable: energyAvailable
                 )
             }
 
@@ -32,7 +34,8 @@ struct AppBreakdownList: View {
                     SystemGroupSection(
                         entries: systemEntries,
                         sparklines: sparklines,
-                        totalAll: totalEnergyNJ
+                        totalAll: totalEnergyNJ,
+                        energyAvailable: energyAvailable
                     )
                 } else {
                     ForEach(systemEntries) { entry in
@@ -40,7 +43,8 @@ struct AppBreakdownList: View {
                             entry: entry,
                             sparkline: sparklines[entry.id] ?? [],
                             totalAll: totalEnergyNJ,
-                            muted: false
+                            muted: false,
+                            energyAvailable: energyAvailable
                         )
                     }
                 }
@@ -55,11 +59,11 @@ struct AppBreakdownList: View {
         }
     }
 
-    private var userEntries: [AppDatabase.AppBreakdownEntry] {
+    private var userEntries: [HistoryDatabase.AppBreakdownEntry] {
         entries.filter { !$0.isSystem }
     }
 
-    private var systemEntries: [AppDatabase.AppBreakdownEntry] {
+    private var systemEntries: [HistoryDatabase.AppBreakdownEntry] {
         entries.filter { $0.isSystem }
     }
 
@@ -69,10 +73,11 @@ struct AppBreakdownList: View {
 }
 
 private struct AppRow: View {
-    let entry: AppDatabase.AppBreakdownEntry
+    let entry: HistoryDatabase.AppBreakdownEntry
     let sparkline: [SparkPoint]
     let totalAll: Int64
     let muted: Bool
+    let energyAvailable: Bool
 
     var body: some View {
         HStack(spacing: 8) {
@@ -83,7 +88,7 @@ private struct AppRow: View {
                 .truncationMode(.middle)
                 .foregroundStyle(muted ? Color.secondary : Color.primary)
             Spacer(minLength: 8)
-            Text(joulesText)
+            Text(energyAvailable ? joulesText : cpuText)
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(muted ? Color.secondary : Color.primary)
                 .frame(width: 70, alignment: .trailing)
@@ -108,17 +113,20 @@ private struct AppRow: View {
         return String(format: "%.2f J", j)
     }
 
+    private var cpuText: String { String(format: "%.1f s", Double(entry.totalCPUNS) / 1_000_000_000) }
+
     private var percentText: String {
-        guard totalAll > 0 else { return "—" }
+        guard energyAvailable, totalAll > 0 else { return "—" }
         let pct = Double(entry.totalEnergyNJ) / Double(totalAll) * 100
         return pct >= 1 ? String(format: "%.0f%%", pct) : "<1%"
     }
 }
 
 private struct SystemGroupSection: View {
-    let entries: [AppDatabase.AppBreakdownEntry]
+    let entries: [HistoryDatabase.AppBreakdownEntry]
     let sparklines: [String: [SparkPoint]]
     let totalAll: Int64
+    let energyAvailable: Bool
     @State private var expanded = false
 
     var body: some View {
@@ -129,7 +137,8 @@ private struct SystemGroupSection: View {
                         entry: entry,
                         sparkline: sparklines[entry.id] ?? [],
                         totalAll: totalAll,
-                        muted: true
+                        muted: true,
+                        energyAvailable: energyAvailable
                     )
                 }
             }
@@ -153,6 +162,7 @@ private struct SystemGroupSection: View {
     }
 
     private var summary: String {
+        guard energyAvailable else { return "(\(entries.count) procs · ranked by CPU time)" }
         let j = Double(summed) / 1_000_000_000.0
         let pct: String = {
             guard totalAll > 0 else { return "—" }

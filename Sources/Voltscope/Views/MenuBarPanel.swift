@@ -170,15 +170,19 @@ struct MenuBarPanel: View {
 
     private var topAppsSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Top energy use (last 30 min)")
+            Text(appState.processEnergyAvailable ? "Top energy use (last 30 min)" : "Top CPU time (last 30 min)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if !appState.processEnergyAvailable {
+                Text("Intel Mac computers do not provide per-process energy data.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
             if appState.topApps.isEmpty && appState.systemSummary.count == 0 {
                 Text("Collecting samples…")
                     .font(.callout)
                     .foregroundStyle(.tertiary)
             } else {
-                let topMax = appState.topApps.map(\.totalEnergyNJ).max() ?? 0
+                let topMax = appState.topApps.map { appState.processEnergyAvailable ? $0.totalEnergyNJ : $0.totalCPUNS }.max() ?? 0
                 ForEach(appState.topApps) { row in
                     appRow(row, topMax: topMax)
                 }
@@ -189,14 +193,15 @@ struct MenuBarPanel: View {
         }
     }
 
-    private func appRow(_ row: AppDatabase.TopAppEnergy, topMax: Int64) -> some View {
+    private func appRow(_ row: HistoryDatabase.TopAppEnergy, topMax: Int64) -> some View {
         HStack(spacing: 8) {
             AppIconView(path: row.path, bundleId: row.bundleIdentifier, size: 16)
             Text(row.processName)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
-            IntensityDots(filled: IntensityDots.dotCount(value: row.totalEnergyNJ, max: topMax))
+            if !appState.processEnergyAvailable { Text(String(format: "%.1fs", Double(row.totalCPUNS) / 1e9)).font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
+            IntensityDots(filled: IntensityDots.dotCount(value: appState.processEnergyAvailable ? row.totalEnergyNJ : row.totalCPUNS, max: topMax))
             Button {
                 openWindow(id: "history")
                 NSApp.activate(ignoringOtherApps: true)
@@ -210,9 +215,10 @@ struct MenuBarPanel: View {
         .help(rowTooltip(row))
     }
 
-    private func rowTooltip(_ row: AppDatabase.TopAppEnergy) -> String {
-        let joules = Double(row.totalEnergyNJ) / 1_000_000_000.0
+    private func rowTooltip(_ row: HistoryDatabase.TopAppEnergy) -> String {
         let bundle = row.bundleIdentifier ?? "(no bundle)"
+        if !appState.processEnergyAvailable { return "\(row.processName)\n\(bundle)\nRanked by CPU time. Intel Mac computers do not provide per-process energy data." }
+        let joules = Double(row.totalEnergyNJ) / 1_000_000_000.0
         return String(format: "%@\n%@\nLast 30 min: %.2f J", row.processName, bundle, joules)
     }
 

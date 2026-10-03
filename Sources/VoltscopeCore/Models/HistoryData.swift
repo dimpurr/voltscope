@@ -11,7 +11,15 @@ public struct HistoryEnergyPoint: Identifiable, Sendable, Equatable {
     public let isSystem: Bool
     public let date: Date
     public let energyNJ: Int64
+    public let cpuNS: Int64?
     public var id: String { "\(appID)@\(date.timeIntervalSince1970)" }
+
+    public init(appID: String, name: String, bundleIdentifier: String?, path: String?, isSystem: Bool,
+                date: Date, energyNJ: Int64, cpuNS: Int64? = nil) {
+        self.appID = appID; self.name = name; self.bundleIdentifier = bundleIdentifier
+        self.path = path; self.isSystem = isSystem; self.date = date
+        self.energyNJ = energyNJ; self.cpuNS = cpuNS
+    }
 }
 
 public struct HistoryApp: Identifiable, Sendable {
@@ -21,6 +29,11 @@ public struct HistoryApp: Identifiable, Sendable {
     public let path: String?
     public let isSystem: Bool
     public let energyNJ: Int64
+    public let cpuNS: Int64
+    public init(id: String, name: String, bundleIdentifier: String?, path: String?, isSystem: Bool, energyNJ: Int64, cpuNS: Int64 = 0) {
+        self.id = id; self.name = name; self.bundleIdentifier = bundleIdentifier; self.path = path
+        self.isSystem = isSystem; self.energyNJ = energyNJ; self.cpuNS = cpuNS
+    }
 }
 
 public enum HistoryMath {
@@ -33,7 +46,8 @@ public enum HistoryMath {
             guard let first = rows.first else { return nil }
             return HistoryApp(id: first.appID, name: first.name, bundleIdentifier: first.bundleIdentifier,
                               path: first.path, isSystem: first.isSystem,
-                              energyNJ: rows.reduce(0) { $0 + $1.energyNJ })
+                              energyNJ: rows.reduce(0) { $0 + $1.energyNJ },
+                              cpuNS: rows.reduce(0) { $0 + ($1.cpuNS ?? 0) })
         }.sorted { $0.energyNJ == $1.energyNJ ? $0.id < $1.id : $0.energyNJ > $1.energyNJ }
     }
 
@@ -62,54 +76,6 @@ public enum HistoryMath {
     }
 }
 
-extension AppDatabase {
-    /// Explicit bounds keep chart, selection and totals on a single snapshot of time.
-    public func historyEnergy(in interval: DateInterval, bucketSeconds: Int) async throws -> [HistoryEnergyPoint] {
-        guard bucketSeconds > 0 else { return [] }
-        let start = Int64(interval.start.timeIntervalSince1970 * 1000)
-        let end = Int64(interval.end.timeIntervalSince1970 * 1000)
-        let bucket = Int64(bucketSeconds) * 1000
-        return try await dbPool.read { db in
-            // One indexed time-range scan. A CTE joined back by COALESCE caused
-            // repeated scans for every app on large histories.
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT COALESCE(bundleIdentifier, processName) AS appID,
-                       bundleIdentifier, MIN(processName) AS name, MAX(path) AS path,
-                       (timestamp / ?) * ? AS bucket, SUM(energyNJ) AS energy
-                FROM EnergyHistory WHERE timestamp >= ? AND timestamp < ?
-                GROUP BY appID, bucket HAVING energy > 0 ORDER BY bucket, appID
-                """, arguments: [bucket, bucket, start, end])
-            var names: [String: String] = [:]
-            var paths: [String: String] = [:]
-            for row in rows {
-                let id: String = row["appID"]
-                let name: String = row["name"]
-                names[id] = min(names[id] ?? name, name)
-                if let path: String = row["path"] { paths[id] = max(paths[id] ?? path, path) }
-            }
-            return rows.map { row in
-                let id: String = row["appID"]
-                let name = names[id] ?? id
-                let bundle: String? = row["bundleIdentifier"]
-                let path = paths[id]
-                return HistoryEnergyPoint(appID: id, name: name, bundleIdentifier: bundle,
-                    path: path, isSystem: AppClassification.isSystem(bundleIdentifier: bundle, processName: name, path: path),
-                    date: Date(timeIntervalSince1970: Double(row["bucket"] as Int64) / 1000), energyNJ: row["energy"])
-            }
-        }
-    }
-
-    public func batteryHistory(in interval: DateInterval) async throws -> [BatterySnapshot] {
-        let start = Int64(interval.start.timeIntervalSince1970 * 1000)
-        let end = Int64(interval.end.timeIntervalSince1970 * 1000)
-        return try await dbPool.read { db in
-            try BatterySnapshot.fetchAll(db, sql: """
-                SELECT * FROM BatteryStatus WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp
-                """, arguments: [start - 90_000, end])
-        }
-    }
-}
-
 /// Immutable rendering data. Build after a query or a grouping change, never on hover.
 public struct HistoryChartModel: Equatable, Sendable {
     public struct Segment: Identifiable, Equatable, Sendable {
@@ -130,8 +96,10 @@ public struct HistoryChartModel: Equatable, Sendable {
     public let upper: Double
     public let bucketTotals: [Date: Double]
     public let bucketItems: [Date: [String]]
+    public let legacyBuckets: Set<Date>
 
-    public init(points: [HistoryEnergyPoint], groupSystem: Bool, selectedApp: String? = nil) {
+    public init(points: [HistoryEnergyPoint], groupSystem: Bool, selectedApp: String? = nil, legacyBuckets: Set<Date> = []) {
+        self.legacyBuckets = legacyBuckets
         let apps = HistoryMath.apps(points)
         let metadata = Dictionary(uniqueKeysWithValues: apps.map { ($0.id, $0) })
         var ids = Array(apps.filter { !groupSystem || !$0.isSystem }.prefix(4).map(\.id))
@@ -159,6 +127,7 @@ public struct HistoryChartModel: Equatable, Sendable {
             bucketItems[date] = rows.sorted { $0.energyNJ > $1.energyNJ }.prefix(3).map {
                 "\($0.name) · \(String(format: "%.2f J", Double($0.energyNJ) / 1e9))"
             }
+            if legacyBuckets.contains(date) { bucketItems[date, default: []].append("Older recording method") }
         }
         segments = stacks.sorted { $0.date == $1.date ? $0.bottom < $1.bottom : $0.date < $1.date }
         let peak = bucketTotals.values.max() ?? 0
@@ -173,56 +142,8 @@ public struct HistoryChartModel: Equatable, Sendable {
 }
 
 extension HistoryApp {
-    public var breakdownEntry: AppDatabase.AppBreakdownEntry {
-        AppDatabase.AppBreakdownEntry(bundleIdentifier: bundleIdentifier, processName: name,
-                                     path: path, totalEnergyNJ: energyNJ, isSystem: isSystem)
-    }
-}
-
-extension AppDatabase {
-    public func historyHardware(in interval: DateInterval, bucketSeconds: Int) async throws -> [BucketSummary] {
-        guard bucketSeconds > 0 else { return [] }
-        let start = Int64(interval.start.timeIntervalSince1970 * 1000)
-        let end = Int64(interval.end.timeIntervalSince1970 * 1000)
-        let width = Int64(bucketSeconds) * 1000
-        return try await dbPool.read { db in
-            let rows = try Row.fetchAll(db, sql: """
-                SELECT bucketName, (timestamp / ?) * ? AS timeBucket, SUM(energyNJ) AS energy
-                FROM SystemBuckets WHERE timestamp >= ? AND timestamp < ?
-                GROUP BY bucketName, timeBucket ORDER BY timeBucket
-                """, arguments: [width, width, start, end])
-            var points: [String: [BucketSummary.SparkPoint]] = [:]
-            for row in rows {
-                let name: String = row["bucketName"]
-                points[name, default: []].append(BucketSummary.SparkPoint(
-                    bucketStart: Date(timeIntervalSince1970: Double(row["timeBucket"] as Int64) / 1000), energyNJ: row["energy"]))
-            }
-            return points.map { name, values in
-                BucketSummary(bucketName: name, totalEnergyNJ: values.reduce(0) { $0 + $1.energyNJ }, sparkline: values)
-            }.sorted { $0.totalEnergyNJ == $1.totalEnergyNJ ? $0.bucketName < $1.bucketName : $0.totalEnergyNJ > $1.totalEnergyNJ }
-        }
-    }
-
-    public func historyEvents(in interval: DateInterval) async throws -> [PowerEvent] {
-        let start = Int64(interval.start.timeIntervalSince1970 * 1000)
-        let end = Int64(interval.end.timeIntervalSince1970 * 1000)
-        return try await dbPool.read { db in
-            try PowerEvent.fetchAll(db, sql: """
-                SELECT * FROM PowerEvents WHERE timestamp >= ? AND timestamp < ?
-                OR timestamp = (SELECT MAX(timestamp) FROM PowerEvents WHERE timestamp < ? AND eventType IN ('sleep', 'wake'))
-                ORDER BY timestamp
-                """, arguments: [start, end, start])
-        }
-    }
-}
-
-extension AppDatabase {
-    public func historySamples(in interval: DateInterval) async throws -> [EnergySample] {
-        let start = Int64(interval.start.timeIntervalSince1970 * 1000)
-        let end = Int64(interval.end.timeIntervalSince1970 * 1000)
-        return try await dbPool.read { db in
-            try EnergySample.filter(Column("timestamp") >= start && Column("timestamp") < end)
-                .order(Column("timestamp"), Column("sampleId")).fetchAll(db)
-        }
+    public var breakdownEntry: HistoryDatabase.AppBreakdownEntry {
+        HistoryDatabase.AppBreakdownEntry(bundleIdentifier: bundleIdentifier, processName: name,
+                                     path: path, totalEnergyNJ: energyNJ, totalCPUNS: cpuNS, isSystem: isSystem)
     }
 }

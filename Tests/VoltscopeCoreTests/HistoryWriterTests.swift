@@ -23,6 +23,38 @@ final class HistoryWriterTests: XCTestCase {
         try await db.dbPool.read { conn in try Int64.fetchOne(conn, sql: sql) ?? 0 }
     }
 
+    func testOneWrittenTickIsReadableThroughHistoryQueries() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let ts = Int64(Date().timeIntervalSince1970 * 1000)
+        try await db.writeTick(timestamp: ts,
+            apps: [SampledApp(groupKey: "tick.app", bundleIdentifier: "tick.app", displayName: "Tick",
+                              pid: 42, energyNJ: 900, cpuNs: 1200)],
+            buckets: [SampledBucket(name: "CPU", energyNJ: 1500)],
+            coverage: SampleCoverage(visible: 12, unreadable: 3))
+        let interval = DateInterval(start: Date(timeIntervalSince1970: Double(ts - 30_000) / 1000),
+                                    end: Date(timeIntervalSince1970: Double(ts + 1) / 1000))
+        let app = try await db.historyEnergy(in: interval, range: .live)
+        let hardware = try await db.historyHardware(in: interval, range: .live)
+        let coverage = try await db.latestCoverage()
+        XCTAssertEqual(app.map(\.energyNJ), [900])
+        XCTAssertEqual(app.map(\.cpuNS), [1200])
+        XCTAssertEqual(hardware.map(\.totalEnergyNJ), [1500])
+        XCTAssertEqual(coverage?.unreadable, 3)
+    }
+
+    func testCPUOnlyRowsRankWithoutCreatingEnergyJoules() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let ts = Int64(Date().timeIntervalSince1970 * 1000)
+        try await db.writeTick(timestamp: ts,
+            apps: [
+                SampledApp(groupKey: "cpu.slow", displayName: "Slow", pid: 1, energyNJ: 0, cpuNs: 100),
+                SampledApp(groupKey: "cpu.busy", displayName: "Busy", pid: 2, energyNJ: 0, cpuNs: 900)
+            ], buckets: [], coverage: SampleCoverage(visible: 2, unreadable: 0), energyUnavailable: true)
+        let rows = try await db.appBreakdown(sinceMinutes: 1, energyAvailable: false)
+        XCTAssertEqual(rows.map(\.processName), ["Busy", "Slow"])
+        XCTAssertTrue(rows.allSatisfy { $0.totalEnergyNJ == 0 })
+    }
+
     func testTickWritingRollupsAreIdempotentAcrossHourAndDayBoundaries() async throws {
         let db = try HistoryDatabase.makeInMemory()
         let start = epoch(2025, 1, 1, 23, 58)

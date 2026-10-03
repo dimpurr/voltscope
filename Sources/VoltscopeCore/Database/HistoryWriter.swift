@@ -58,6 +58,24 @@ public struct SampleCoverage: Equatable, Sendable {
 }
 
 public extension HistoryDatabase {
+    func writeBatterySnapshot(_ snapshot: BatterySnapshot) async throws {
+        try await dbPool.write { db in try snapshot.insert(db, onConflict: .replace) }
+    }
+
+    func writePowerEvent(_ event: PowerEvent) async throws {
+        try await dbPool.write { db in try event.insert(db, onConflict: .replace) }
+    }
+
+    /// Writes hardware bucket deltas from the independently scheduled sampler.
+    func writeBuckets(timestamp: Int64, buckets: [SampledBucket], metricVersion: Int = EnergyMetric.currentVersion) async throws {
+        try await dbPool.write { db in
+            for sample in buckets {
+                let bucketId = try upsertBucket(db, name: sample.name)
+                try BucketSampleRaw(ts: timestamp, bucketId: bucketId, metricVersion: metricVersion, energyNJ: sample.energyNJ).insert(db)
+            }
+        }
+    }
+
     /// Writes a complete sampling tick atomically. When process energy is not
     /// available, callers may retain CPU-active rows by setting
     /// `energyUnavailable`; this decision is supplied by the platform layer.

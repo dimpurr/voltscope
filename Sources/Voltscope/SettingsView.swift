@@ -41,9 +41,41 @@ struct SettingsView: View {
             } else if appState.loginItemStatus == .notFound {
                 feedback("Login item is unavailable for this app build.", symbol: "exclamationmark.triangle")
             }
+
+            Divider()
+            Picker("Raw detail retention", selection: Binding(
+                get: { appState.rawRetentionDays }, set: { appState.setRawRetentionDays($0) }
+            )) {
+                ForEach([2, 7, 14, 30], id: \.self) { Text("\($0) days").tag($0) }
+            }
+            .pickerStyle(.menu)
+            .disabled(appState.database == nil)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Old database: \(appState.legacyImportStatus?.state.rawValue ?? "checking")")
+                    .font(.caption)
+                if let error = appState.legacyImportStatus?.error {
+                    Text(error).font(.caption2).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                }
+                if let progress = appState.legacyImportProgress {
+                    ProgressView(value: Double(progress.importedHours), total: Double(max(progress.totalHours, 1)))
+                    Text("\(progress.importedHours) of \(progress.totalHours) hours imported")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                if let deleteAfter = appState.legacyImportStatus?.deleteAfter {
+                    Text("Automatic deletion after \(deleteAfter.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                HStack {
+                    Spacer()
+                    Button("Delete old database now") { appState.deleteLegacyDatabaseNow() }
+                        .controlSize(.small)
+                        .disabled(appState.legacyImportStatus?.state != .done)
+                }
+            }
         }
         .padding(20)
-        .onAppear { appState.refreshLoginItemStatus() }
+        .onAppear { appState.refreshLoginItemStatus(); Task { await appState.refreshLegacyImportStatus() } }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             appState.refreshLoginItemStatus()
         }

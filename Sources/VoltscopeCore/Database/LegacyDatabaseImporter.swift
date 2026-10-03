@@ -623,6 +623,20 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
 
 /// Guarded legacy file lifecycle operations.
 public extension HistoryDatabase {
+    /// Starts migration asynchronously when an unfinished legacy file exists.
+    /// The returned task owns the import work; callers can observe progress
+    /// without awaiting completion during application startup.
+    func startLegacyImportIfNeeded(
+        at legacyURL: URL,
+        rawRetentionDays: Int = 7,
+        progress: (@Sendable (LegacyImportProgress) -> Void)? = nil
+    ) async throws -> Task<Void, Error>? {
+        guard FileManager.default.fileExists(atPath: legacyURL.path) else { return nil }
+        guard try await importStatus().state != .done else { return nil }
+        return LegacyDatabaseImporter(history: self, legacyURL: legacyURL,
+                                      rawRetentionDays: rawRetentionDays, progress: progress).start()
+    }
+
     func deleteLegacyDatabaseImmediately(at legacyURL: URL) async throws {
         try await deleteLegacyDatabase(at: legacyURL, requireExpiry: false)
     }

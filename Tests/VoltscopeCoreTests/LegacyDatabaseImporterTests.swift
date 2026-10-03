@@ -519,8 +519,9 @@ final class LegacyDatabaseImporterTests: XCTestCase {
             try PowerEvent(timestamp: lateTimestamp, eventType: .sleep, durationSeconds: 7, metadata: "late").insert(db)
         }
         let history = try makeHistory()
-        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
-                                         timebase: LegacyTimebase(numer: 1, denom: 1)).start().value
+        let startupTask = try await history.startLegacyImportIfNeeded(at: legacyURL, rawRetentionDays: 7)
+        XCTAssertNotNil(startupTask)
+        try await startupTask?.value
 
         let result = try await history.dbPool.read { db -> (String, Int, Int, Double?, String?) in
             (
@@ -839,6 +840,30 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         for suffix in ["", "-wal", "-shm"] {
             XCTAssertFalse(FileManager.default.fileExists(atPath: oldFile.path + suffix))
         }
+    }
+
+    func testTemporaryLegacyLifecycleImportsVerifiesThenDeletesAfterExpiry() async throws {
+        let history = try makeHistory()
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                         timebase: LegacyTimebase(numer: 1, denom: 1)).start().value
+        let status = try await history.importStatus()
+        XCTAssertEqual(status.state, .done)
+        XCTAssertNotNil(status.deleteAfter)
+        let imported = try await history.dbPool.read { db in
+            try Int64.fetchOne(db, sql: "SELECT SUM(energyNJ) FROM AppUsageHour WHERE metricVersion=0") ?? 0
+        }
+        XCTAssertGreaterThan(imported, 0)
+        let repeatedTask = try await history.startLegacyImportIfNeeded(at: legacyURL)
+        XCTAssertNil(repeatedTask, "a verified legacy source is not imported twice")
+        try await history.dbPool.write { db in
+            try db.execute(sql: "UPDATE Meta SET value='0' WHERE key='legacy.deleteAfter'")
+        }
+        let deleted = try await history.deleteLegacyDatabaseIfExpired(at: legacyURL, now: Date())
+        XCTAssertTrue(deleted)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyURL.path))
     }
 
     func testReadOnlyPerformanceImportWhenExplicitlyConfigured() async throws {

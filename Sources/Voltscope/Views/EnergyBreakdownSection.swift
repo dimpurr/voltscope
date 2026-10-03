@@ -3,7 +3,7 @@ import VoltscopeCore
 
 /// Original v0.6.2 hardware column; independent channels are not battery shares.
 struct EnergyBreakdownSection: View {
-    let summaries: [AppDatabase.BucketSummary]
+    let summaries: [HistoryDatabase.BucketSummary]
     let totalDrainJ: Double
     let bucketSeconds: Int
     let bucketSamplerAvailable: Bool
@@ -67,7 +67,7 @@ struct EnergyBreakdownSection: View {
 }
 
 private struct BucketRow: View {
-    let summary: AppDatabase.BucketSummary
+    let summary: HistoryDatabase.BucketSummary
     let totalJ: Double
     let bucketSeconds: Int
 

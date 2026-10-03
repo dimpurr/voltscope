@@ -1,6 +1,6 @@
 # Voltscope — Energy Attribution Model
 
-> Current contract and future model for Voltscope's energy measurements. The v0.7.2 release reports recorded CPU attribution; the whole-device apportionment model remains planned.
+> Current contract and future model for Voltscope energy measurements. The current release reports recorded per-process CPU energy; whole-device apportionment remains planned.
 
 ---
 
@@ -19,23 +19,18 @@ its CPU-only data source cannot do so by itself.
 
 ---
 
-## 2. Why v0.5 cannot answer it
+## 2. What the current process value means
 
-The v0.5 sampling architecture reads `proc_pid_rusage(RUSAGE_INFO_V6).ri_billed_energy` for every running process at the interval defined in the [architecture guide](HLD.md#core-flows). That field returns kernel-billed nanojoules **of the CPU portion attributed to that process**. The number is real, the granularity is per-process, the API is public — these properties are why we built on it.
+Current samples use the `ri_energy_nj` delta from `proc_pid_rusage(RUSAGE_INFO_V6)`.
+It is a hardware-estimated per-task CPU energy value in nanojoules. It is not a
+measurement of the whole device and cannot be divided by battery drain to claim
+an app's share of battery use.
 
-But on a modern MacBook, **per-process CPU energy is only 1–3 % of total battery drain**. Empirical reconciliation from a real 24-hour export:
-
-| Source | Joules over 24 h | % of 12 % battery drop |
-|---|---|---|
-| Voltscope sum of all `energyNJ` | **397 J** | ~1.3 % |
-| Estimated 12 % of 70 Wh battery | ~30,240 J | 100 % |
-| **Untracked gap** | **~29,840 J** | **~98.7 %** |
-
-That ~98.7 % is real energy. It went to the display backlight, GPU/ANE/DRAM, Wi-Fi/BT/cellular radios, SoC static power, idle drain, sleep drain, kernel-mode work not attributed to any user PID, and so on. None of it appears in `ri_billed_energy`. So Voltscope can rank apps against each other on CPU usage, but it cannot put a percentage of *the actual battery* next to any app, which is what the user actually wants.
-
-This is not a bug. It is an **architectural ceiling** of the chosen data source. Lifting the ceiling is a v0.6+ scope expansion.
-
----
+Earlier versions used `ri_billed_energy`, which reflects energy billed through
+the task bank rather than the task's own energy. A change to `ri_energy_nj` can
+make newly recorded app values much larger than earlier values. Voltscope keeps
+those records under a distinct metric version, queries one version at a time,
+and marks older-method chart buckets. It does not add the old and new values.
 
 ## 3. General two-layer model
 
@@ -61,7 +56,7 @@ unattributed energy instead of silently turning an estimate into a measurement.
 | Signal | API | Public? | Root? | Per-process? |
 |---|---|---|---|---|
 | Total drain (V × A) | `IOPSCopyPowerSourcesInfo`, `IOPSGetProvidingPowerSourceType` | **Public** | No | No (system) |
-| Per-PID CPU energy | `proc_pid_rusage(RUSAGE_INFO_V6).ri_billed_energy` | **Public** | No | **Yes** ✓ |
+| Per-PID CPU energy | `proc_pid_rusage(RUSAGE_INFO_V6).ri_energy_nj` | **Public** | No | **Yes** ✓ |
 | Per-PID wakeups, QoS | `task_info(TASK_POWER_INFO)`; also in `rusage_info_v6` | **Public** | No | **Yes** |
 | System component energy buckets — CPU-P / CPU-E / GPU / ANE / DRAM / Display / Fabric | **IOReport** framework — groups: `Energy Model`, `CPU Stats`, `GPU Stats`; channels: `PMP`, `DISP`/`DISPEXT`, `ANE`, `DCS`, `AMCC` | Private but no entitlement, no root, callable from user code via `dlopen` | **No** | No (system per bucket) |
 | Display backlight power (M1–M4) | SMC key `PDBR` | Private but stable | No | No |
@@ -88,7 +83,7 @@ unattributed energy instead of silently turning an estimate into a measurement.
 │  ┌──────────────────┐    ┌──────────────────────────────────────┐ │
 │  │ Sampling layer   │    │           Apportionment layer        │ │
 │  │                  │    │                                      │ │
-│  │ ProcessSampler   ├──► │ CPU bucket  ÷  per-PID ri_billed_J  │ │
+│  │ ProcessSampler   ├──► │ CPU bucket  ÷  per-PID ri_energy_nj  │ │
 │  │  (rusage)        │    │ GPU bucket  ÷  per-PID GPU ms/s     │ │
 │  │                  │    │              (or CPU share fallback) │ │
 │  │ BucketSampler    │    │ Display bkt ÷  foreground app time   │ │
@@ -116,8 +111,7 @@ unattributed energy instead of silently turning an estimate into a measurement.
 
 ### New tables (additive to v0.5 schema)
 
-The schema and storage design below will change in 0.10.0; current physical
-schema comes from the database migrations.
+The tables below describe a planned whole-device attribution model. Current persistence is described in §7 and the architecture guide.
 
 - **`SystemBuckets`** — `(timestamp, bucketName, joules)` — bucket sampler output. Bucket names: `cpu_p`, `cpu_e`, `gpu`, `ane`, `dram`, `fabric`, `display`, `wifi`, `bt`, `sleep`. ~10 buckets × 1 sample/5 s = ~170 KB/day.
 - **`NetworkUsage`** — `(timestamp, pid, bundleIdentifier, bytesIn, bytesOut)` — per-PID byte deltas from `NStatManager`. Sample cadence 30 s.
@@ -159,7 +153,7 @@ While prototyping v0.6 on macOS 26.3.1 we discovered that **`IOReport.framework`
 | `IOReportFamily.kext` | ✅ Loaded; kernel-side reporter API unchanged |
 | `IOServiceMatching("IOReportHub")` | ✅ Returns 1 service; can be opened via `IOServiceOpen` |
 | `IOReportLegend` property on services | ✅ Readable via `IORegistryEntryCreateCFProperties` (5+ bearers found in the first IORegistry sweep) |
-| `proc_pid_rusage(RUSAGE_INFO_V6).ri_billed_energy` | ✅ Per-process CPU energy (the v0.5 layer) |
+| `proc_pid_rusage(RUSAGE_INFO_V6).ri_energy_nj` | ✅ Per-process CPU energy (the v0.5 layer) |
 | `IOPSCopyPowerSourcesInfo` (V × I integration) | ✅ Total drain denominator |
 | `powermetrics` binary | ✅ Still ships at `/usr/bin/powermetrics`, still requires root |
 | `PowerLog.framework` | ✅ Auto-loaded into every Swift process — symbols undocumented |
@@ -245,25 +239,25 @@ The original HLD planned `SystemPower` table and `SMAppService` helper for v1.0.
 
 ---
 
-## 7. Storage budget revision
+## 7. Storage and retention (current)
 
-The storage model in this section will change in 0.10.0; keep its migration
-details aligned with code until then.
+The application writes `history.sqlite` with GRDB `DatabasePool` and WAL. Its
+incremental auto-vacuum setting is enabled before schema creation. Process and
+hardware raw rows are retained for the user-selected period (2, 7, 14, or 30
+days; default 7). Per-minute summaries are retained for 30 days. Per-hour
+summaries, battery snapshots, and power events are retained indefinitely.
 
-The v0.5 HLD claimed "~3 MB raw per day (30 processes × 17,280 samples × ~50 B/row)." Empirical measurement on a real machine writes **~400 MB to ~1 GB per day** because:
+A maintenance run is scheduled on the existing five-minute checkpoint timer. It
+recomputes eligible minute and hour summaries, prunes expired raw and minute
+rows, then requests `PRAGMA incremental_vacuum(2000)`. Rollups are versioned and
+idempotent. On-disk size depends on the number of active processes, sample
+activity, and SQLite page reuse; the implementation does not promise a fixed
+maximum database size.
 
-- `proc_listallpids` returns 300–500 processes on a typical machine, not 30.
-- SQLite WAL writes amplify by ~2–3 × (WAL append + checkpoint rewrite).
-- `ri_diskio_byteswritten` counted by the rusage of Voltscope itself further inflates the *reported* number by including mmap-backed cache writes against the WAL file (the on-disk file is smaller than the rusage figure suggests).
+The former `db.sqlite` remains read-only migration input. Import is resumable
+and verified before it can be deleted. A completed import sets a seven-day
+delete deadline; Settings can delete it sooner after completion.
 
-Fixes shipping with v0.6:
-
-1. Drop zero-energy rows at insert time (most of the 500-process roster has `ri_billed_energy == 0` per sample). *Implemented in 0.9.1.*
-2. Periodic SQLite `wal_checkpoint(TRUNCATE)` every 5 minutes to bound WAL growth.
-3. Background compaction job: rows older than 24 h are aggregated to per-minute per-bundle rollups; rows older than 7 days to per-hour rollups. Drops storage to <50 MB per 30-day rolling window. *Not yet implemented; planned for 0.10.0.*
-4. Add `SAMPLE_INTERVAL_SLEEP` — when `IOPMAssertion` says display is off and no AC is plugged, throttle to 30-s sampling. *Not implemented; sampling stays at 5 s.*
-
-Revised storage target: **<5 MB raw per day at active use, <50 MB lifetime for a 30-day rolling window after compaction.**
 
 ---
 
@@ -292,7 +286,7 @@ The shipped chart remains recorded per-process CPU attribution. It does not scal
 ### Current sampler metric contract
 
 The current process sampler reads `ri_energy_nj` from `RUSAGE_INFO_V6` for
-per-process hardware-estimated CPU energy. It converts `ri_user_time` and
+per-process hardware-estimated CPU energy. Earlier records using `ri_billed_energy` have metric version 0; current records have metric version 1, and queries never add the versions together. It converts `ri_user_time` and
 `ri_system_time` using the active Mach timebase before recording nanoseconds.
 The first observation establishes a baseline, and intervals with zero energy
 delta do not emit process rows. The system bucket sampler selects a summary
@@ -302,8 +296,7 @@ summary nor any cluster total. GPU Energy suppresses GPU child channels on the
 same die, while GPU SRAM remains a separate bucket. IOReport channels without
 an Energy unit are skipped. Process coverage counts include successful reads
 and `EPERM` failures; transient process exits such as `ESRCH` are excluded.
-Coverage and energy-availability state are exposed by the sampling coordinator
-but are not persisted in the current schema.
+Each process scan writes visible and unreadable counts to `Coverage`; hourly totals are retained in `CoverageHour`. Energy availability is exposed by the sampling coordinator and the interface.
 
 Battery discharge integration requires both adjacent endpoints to be unplugged, non-charging, with nonpositive signed current and valid voltage. Gaps over 90 seconds and supply transitions are excluded; trapezoidal integration is clipped to the query bounds. This is observed discharge, not a full-window total. Sleep and missing coverage are not inferred. Hardware channels are displayed independently in joules without battery percentages or subtraction-based Other.
 

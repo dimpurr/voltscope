@@ -3,6 +3,114 @@ import GRDB
 
 /// Queries over the tiered history store. All output dates use UTC epoch-aligned buckets.
 extension HistoryDatabase {
+    public struct TopAppEnergy: Sendable, Equatable, Identifiable {
+        public let bundleIdentifier: String?
+        public let processName: String
+        public let path: String?
+        public let totalEnergyNJ: Int64
+        public let totalCPUNS: Int64
+        public var id: String { bundleIdentifier ?? processName }
+        public init(bundleIdentifier: String?, processName: String, path: String?, totalEnergyNJ: Int64, totalCPUNS: Int64 = 0) {
+            self.bundleIdentifier = bundleIdentifier; self.processName = processName; self.path = path
+            self.totalEnergyNJ = totalEnergyNJ; self.totalCPUNS = totalCPUNS
+        }
+    }
+
+    public struct AppBreakdownEntry: Sendable, Equatable, Identifiable {
+        public let bundleIdentifier: String?
+        public let processName: String
+        public let path: String?
+        public let totalEnergyNJ: Int64
+        public let totalCPUNS: Int64
+        public let isSystem: Bool
+        public var id: String { bundleIdentifier ?? processName }
+        public init(bundleIdentifier: String?, processName: String, path: String?, totalEnergyNJ: Int64,
+                    totalCPUNS: Int64, isSystem: Bool) {
+            self.bundleIdentifier = bundleIdentifier; self.processName = processName; self.path = path
+            self.totalEnergyNJ = totalEnergyNJ; self.totalCPUNS = totalCPUNS; self.isSystem = isSystem
+        }
+    }
+
+    public struct ImportStatus: Sendable, Equatable {
+        public let state: LegacyImportState
+        public let importedHours: Int64
+        public let totalHours: Int64
+        public let error: String?
+        public let deleteAfter: Date?
+    }
+
+    public func latestBatterySnapshot() async throws -> BatterySnapshot? {
+        try await dbPool.read { db in try BatterySnapshot.order(Column("timestamp").desc).limit(1).fetchOne(db) }
+    }
+
+    public func latestCoverage() async throws -> Coverage? {
+        try await dbPool.read { db in try Coverage.order(Column("ts").desc).limit(1).fetchOne(db) }
+    }
+
+    public func earliestSampleTimestamp() async throws -> Date? {
+        try await dbPool.read { db in
+            guard let ts = try Int64.fetchOne(db, sql: "SELECT MIN(ts) FROM AppSampleRaw") else { return nil }
+            return Date(timeIntervalSince1970: Double(ts) / 1000)
+        }
+    }
+
+    public func bucketSamplerActive(withinMinutes minutes: Int = 5) async throws -> Bool {
+        let since = Int64(Date().addingTimeInterval(-Double(minutes) * 60).timeIntervalSince1970 * 1000)
+        return try await dbPool.read { db in try Int.fetchOne(db, sql: "SELECT 1 FROM BucketSampleRaw WHERE ts >= ? LIMIT 1", arguments: [since]) != nil }
+    }
+
+    public func appBreakdown(sinceMinutes minutes: Int, energyAvailable: Bool = true) async throws -> [AppBreakdownEntry] {
+        let start = Int64(Date().addingTimeInterval(-Double(minutes) * 60).timeIntervalSince1970 * 1000)
+        return try await dbPool.read { db in
+            let rows = try Row.fetchAll(db, sql: """
+                SELECT a.bundleIdentifier, a.displayName AS processName, a.path,
+                       SUM(r.energyNJ) AS energy, SUM(r.cpuNs) AS cpu
+                FROM AppSampleRaw r JOIN App a ON a.id = r.appId
+                WHERE r.ts >= ? AND r.metricVersion = ?
+                GROUP BY r.appId ORDER BY \(energyAvailable ? "energy" : "cpu") DESC
+                """, arguments: [start, EnergyMetric.currentVersion])
+            return rows.compactMap { row in
+                guard let name: String = row["processName"], let energy: Int64 = row["energy"], let cpu: Int64 = row["cpu"] else { return nil }
+                let bundle: String? = row["bundleIdentifier"]
+                let path: String? = row["path"]
+                return AppBreakdownEntry(bundleIdentifier: bundle, processName: name, path: path,
+                    totalEnergyNJ: energy, totalCPUNS: cpu,
+                    isSystem: AppClassification.isSystem(bundleIdentifier: bundle, processName: name, path: path))
+            }
+        }
+    }
+
+    public func topApps(sinceMinutes minutes: Int, limit: Int = 5, energyAvailable: Bool = true) async throws -> [TopAppEnergy] {
+        let entries = try await appBreakdown(sinceMinutes: minutes, energyAvailable: energyAvailable)
+        return entries.prefix(limit).map {
+            TopAppEnergy(bundleIdentifier: $0.bundleIdentifier, processName: $0.processName, path: $0.path,
+                         totalEnergyNJ: $0.totalEnergyNJ, totalCPUNS: $0.totalCPUNS)
+        }
+    }
+
+    public func importStatus() async throws -> ImportStatus {
+        try await dbPool.read { db in
+            let values = try Dictionary(uniqueKeysWithValues: Row.fetchAll(db, sql: "SELECT key, value FROM Meta WHERE key LIKE 'legacy.%'").compactMap { row -> (String, String)? in
+                guard let key: String = row["key"], let value: String = row["value"] else { return nil }; return (key, value)
+            })
+            let state = LegacyImportState(rawValue: values["legacy.state"] ?? "none") ?? .none
+            let doneAfter = values["legacy.deleteAfter"].flatMap(Int64.init).map { Date(timeIntervalSince1970: Double($0) / 1000) }
+            let imported = Int64(values["legacy.cursorHour"] ?? "0") ?? 0
+            let total = Int64(values["legacy.totalHours"] ?? "0") ?? 0
+            return ImportStatus(state: state, importedHours: imported, totalHours: total,
+                                error: values["legacy.error"], deleteAfter: doneAfter)
+        }
+    }
+
+    public func rawRetentionDays() async throws -> Int {
+        try await dbPool.read { db in try Int.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key='settings.rawRetentionDays'") ?? 7 }
+    }
+
+    public func setRawRetentionDays(_ days: Int) async throws {
+        guard [2, 7, 14, 30].contains(days) else { return }
+        try await dbPool.write { db in try db.execute(sql: "INSERT INTO Meta(key,value) VALUES('settings.rawRetentionDays',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", arguments: [String(days)]) }
+    }
+
     public struct BucketSummary: Sendable, Equatable, Identifiable {
         public let bucketName: String
         public let totalEnergyNJ: Int64
@@ -22,6 +130,7 @@ extension HistoryDatabase {
 
     /// One raw row with the public CSV column set.
     public struct CSVSample: Sendable, Equatable {
+        public static let columnNames = ["timestamp_ms", "iso8601", "pid", "parent_pid", "bundle_id", "process_name", "path", "cpu_ns", "energy_nj", "wakeups", "disk_read_bytes", "disk_write_bytes", "metric_version"]
         public let timestampMS: Int64
         public let iso8601: String
         public let pid: Int32
@@ -53,7 +162,8 @@ extension HistoryDatabase {
                 path: row.path,
                 isSystem: AppClassification.isSystem(bundleIdentifier: row.bundleIdentifier, processName: row.displayName, path: row.path),
                 date: date,
-                energyNJ: row.energyNJ
+                energyNJ: row.energyNJ,
+                cpuNS: row.cpuNS
             )
         }
     }
@@ -167,6 +277,7 @@ private extension HistoryDatabase {
         let displayName: String
         let path: String?
         let energyNJ: Int64
+        let cpuNS: Int64
     }
 
     static func epochMilliseconds(_ date: Date) -> Int64 { Int64(date.timeIntervalSince1970 * 1000) }
@@ -202,9 +313,9 @@ private extension HistoryDatabase {
             let rows = try Row.fetchAll(db, sql: Self.energySQL(range: range), arguments: arguments)
             return rows.compactMap { row in
                 guard let bucket: Int64 = row["bucketMS"], let key: String = row["groupKey"],
-                      let name: String = row["displayName"], let energy: Int64 = row["energyNJ"] else { return nil }
+                      let name: String = row["displayName"], let energy: Int64 = row["energyNJ"], let cpu: Int64 = row["cpuNs"] else { return nil }
                 return EnergyQueryRow(bucketMS: bucket, groupKey: key, bundleIdentifier: row["bundleIdentifier"],
-                                      displayName: name, path: row["path"], energyNJ: energy)
+                                      displayName: name, path: row["path"], energyNJ: energy, cpuNS: cpu)
             }
         }
     }
@@ -230,7 +341,7 @@ private extension HistoryDatabase {
     static func energySQL(range: HistoryRange) -> String {
         if range == .live {
             return """
-                SELECT (r.ts / ?) * ? AS bucketMS, a.groupKey, a.bundleIdentifier, a.displayName, a.path, SUM(r.energyNJ) AS energyNJ
+                SELECT (r.ts / ?) * ? AS bucketMS, a.groupKey, a.bundleIdentifier, a.displayName, a.path, SUM(r.energyNJ) AS energyNJ, SUM(r.cpuNs) AS cpuNs
                 FROM AppSampleRaw r JOIN App a ON a.id = r.appId
                 WHERE r.ts >= ? AND r.ts < ? AND r.metricVersion = ?
                 GROUP BY bucketMS, r.appId HAVING energyNJ > 0 ORDER BY bucketMS, a.groupKey
@@ -242,14 +353,14 @@ private extension HistoryDatabase {
         let unitMS: Int64 = isHour ? 3_600_000 : 60_000
         return """
             WITH tier AS (
-                SELECT ((u.\(timeCol) * \(unitMS)) / ?) * ? AS bucketMS, u.appId, u.energyNJ
+                SELECT ((u.\(timeCol) * \(unitMS)) / ?) * ? AS bucketMS, u.appId, u.energyNJ, u.cpuNs
                 FROM \(table) u WHERE u.\(timeCol) * \(unitMS) >= ? AND u.\(timeCol) * \(unitMS) < ? AND u.metricVersion = ?
                 UNION ALL
-                SELECT (r.ts / ?) * ? AS bucketMS, r.appId, r.energyNJ
+                SELECT (r.ts / ?) * ? AS bucketMS, r.appId, r.energyNJ, r.cpuNs
                 FROM AppSampleRaw r WHERE r.ts >= ? AND r.ts < ? AND r.metricVersion = ?
                     AND (r.ts >= ? OR r.ts < ? OR r.ts >= ?)
             )
-            SELECT t.bucketMS, a.groupKey, a.bundleIdentifier, a.displayName, a.path, SUM(t.energyNJ) AS energyNJ
+            SELECT t.bucketMS, a.groupKey, a.bundleIdentifier, a.displayName, a.path, SUM(t.energyNJ) AS energyNJ, SUM(t.cpuNs) AS cpuNs
             FROM tier t JOIN App a ON a.id = t.appId GROUP BY t.bucketMS, t.appId HAVING energyNJ > 0 ORDER BY t.bucketMS, a.groupKey
             """
     }

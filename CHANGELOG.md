@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — 0.10.0
+
+- App energy now uses the per-task CPU energy counter. Values may be hundreds
+  or thousands of times larger than older readings because the previous counter
+  reported energy billed through a task bank rather than the task’s own energy.
+- Older readings remain available with an orange chart marker and an
+  explanation; the app never adds old and current metric versions together.
+- CSV export now includes `cpu_ns` and `metric_version`, and uses one `cpu_ns`
+  column instead of separate user and system CPU columns.
+- New local history is written to `history.sqlite` with tiered summaries and
+  configurable raw detail retention. Existing `db.sqlite` data is imported in
+  the background, verified, and kept for seven days after completion before
+  automatic deletion. Settings offers deletion after import completes.
+- Intel Macs rank app activity by CPU time and explain that per-process energy
+  data is unavailable.
+
 ## 0.9.1 — 2026-10-02
 
 - Process samples that recorded no energy for the interval are no longer

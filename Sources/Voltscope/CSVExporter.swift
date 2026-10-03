@@ -7,7 +7,7 @@ enum CSVExporter {
     /// Presents a save panel and, on confirmation, streams the energy
     /// history for the requested window into a CSV file.
     @MainActor
-    static func exportEnergyHistory(database: AppDatabase, interval: DateInterval) async {
+    static func exportEnergyHistory(database: HistoryDatabase, interval: DateInterval) async {
         let panel = NSSavePanel()
         panel.title = "Export Energy History as CSV"
         panel.message = "Saves the visible time range as a comma-separated values file."
@@ -30,7 +30,7 @@ enum CSVExporter {
         }
     }
 
-    private static func writeCSV(database: AppDatabase, interval: DateInterval, to url: URL) async throws {
+    private static func writeCSV(database: HistoryDatabase, interval: DateInterval, to url: URL) async throws {
         FileManager.default.createFile(atPath: url.path, contents: nil)
         guard let handle = try? FileHandle(forWritingTo: url) else {
             throw NSError(
@@ -41,29 +41,29 @@ enum CSVExporter {
         }
         defer { try? handle.close() }
 
-        let header = "timestamp_ms,iso8601,pid,parent_pid,bundle_id,process_name,path,cpu_user_ns,cpu_system_ns,energy_nj,wakeups,disk_read_bytes,disk_write_bytes\n"
+        let header = HistoryDatabase.CSVSample.columnNames.joined(separator: ",") + "\n"
         try handle.write(contentsOf: Data(header.utf8))
 
         let isoFormatter = ISO8601DateFormatter()
         isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
-        let samples = try await database.historySamples(in: interval)
+        let samples = try await database.historySamplesForCSV(in: interval)
         for sample in samples {
-            let iso = isoFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(sample.timestamp) / 1000.0))
+            let iso = isoFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(sample.timestampMS) / 1000.0))
             let line = [
-                String(sample.timestamp),
+                String(sample.timestampMS),
                 iso,
                 String(sample.pid),
                 sample.parentPid.map(String.init) ?? "",
-                csvEscape(sample.bundleIdentifier ?? ""),
+                csvEscape(sample.bundleID ?? ""),
                 csvEscape(sample.processName),
                 csvEscape(sample.path ?? ""),
-                String(sample.cpuUserNs),
-                String(sample.cpuSystemNs),
+                String(sample.cpuNS),
                 String(sample.energyNJ),
                 String(sample.wakeups),
                 String(sample.diskReadBytes),
-                String(sample.diskWriteBytes)
+                String(sample.diskWriteBytes),
+                String(sample.metricVersion)
             ].joined(separator: ",") + "\n"
             try handle.write(contentsOf: Data(line.utf8))
         }

@@ -34,7 +34,7 @@ struct VoltscopeApp: App {
         Window("Voltscope Settings", id: "settings") {
             SettingsView()
                 .environmentObject(appState)
-                .frame(width: 420, height: 160)
+                .frame(width: 420, height: 300)
                 .onAppear { appState.refreshLoginItemStatus() }
         }
 
@@ -55,14 +55,14 @@ struct SystemAppSummary: Equatable {
     /// Top N system processes by energy in the window — surfaced inline when
     /// the dropdown's System section is expanded so the disclosure has actual
     /// content rather than a single "open History" sentence.
-    let topItems: [AppDatabase.TopAppEnergy]
+    let topItems: [HistoryDatabase.TopAppEnergy]
     static let empty = SystemAppSummary(count: 0, totalEnergyNJ: 0, topItems: [])
 }
 
 @MainActor
 final class AppState: ObservableObject {
     @Published var lastBattery: BatterySnapshot?
-    @Published var topApps: [AppDatabase.TopAppEnergy] = []
+    @Published var topApps: [HistoryDatabase.TopAppEnergy] = []
     @Published var systemSummary: SystemAppSummary = .empty
     @Published var statusText: String = "Starting…"
     /// True when the bucket sampler has produced at least one row in the
@@ -73,18 +73,24 @@ final class AppState: ObservableObject {
     /// the "bucket sampling unavailable" diagnostic until after the
     /// expected first-tick interval has passed.
     @Published var startedAt: Date = Date()
+    @Published var processEnergyAvailable = true
+    @Published var unreadableProcessCount = 0
+    @Published var legacyImportStatus: HistoryDatabase.ImportStatus?
+    @Published var legacyImportProgress: LegacyImportProgress?
+    @Published var rawRetentionDays = 7
 
     @Published private(set) var loginItemStatus: LoginItemStatusKind
     @Published private(set) var loginItemFeedback: String?
     static let loginOnboardingHandledKey = "loginItemOnboardingHandled"
 
-    private(set) var database: AppDatabase?
+    private(set) var database: HistoryDatabase?
     private var coordinator: SamplingCoordinator?
     private var eventListener: EventListener?
     private var refreshTask: Task<Void, Never>?
     private let loginItemManager: LoginItemManager
     private var updateCheckTask: Task<Void, Never>?
     private var updateCheckInFlight = false
+    private var importerTask: Task<Void, Never>?
 
     private let updaterController: SPUStandardUpdaterController
 
@@ -205,8 +211,23 @@ final class AppState: ObservableObject {
 
     private func bootstrap() async {
         do {
-            let db = try AppDatabase.makeDefault()
+            let db = try HistoryDatabase.makeDefault()
             self.database = db
+            self.processEnergyAvailable = ProcessSampler().energyAvailable
+            self.rawRetentionDays = (try? await db.rawRetentionDays()) ?? 7
+            let legacyURL = try AppPaths.databaseURL()
+            _ = try? await db.deleteLegacyDatabaseIfExpired(at: legacyURL)
+            await refreshLegacyImportStatus()
+            if let importWork = try await db.startLegacyImportIfNeeded(
+                at: legacyURL, rawRetentionDays: rawRetentionDays, progress: { [weak self] progress in
+                        Task { @MainActor in self?.legacyImportProgress = progress }
+                }) {
+                importerTask = Task { @MainActor [weak self] in
+                    do { try await importWork.value }
+                    catch { self?.statusText = "Legacy import failed: \(error.localizedDescription)" }
+                    await self?.refreshLegacyImportStatus()
+                }
+            }
             let coord = SamplingCoordinator(database: db)
             self.coordinator = coord
             await coord.start()
@@ -241,26 +262,27 @@ final class AppState: ObservableObject {
     func refreshNow() async {
         guard let db = database else { return }
         do {
+            if let legacyURL = try? AppPaths.databaseURL() { _ = try? await db.deleteLegacyDatabaseIfExpired(at: legacyURL) }
             self.lastBattery = try await db.latestBatterySnapshot()
             // Use appBreakdown so we can split user apps from system processes
             // for the dropdown's collapsible System section, in one read.
-            let breakdown = try await db.appBreakdown(sinceMinutes: 30)
+            let breakdown = try await db.appBreakdown(sinceMinutes: 30, energyAvailable: processEnergyAvailable)
             let userTop = breakdown.filter { !$0.isSystem }.prefix(5).map {
-                AppDatabase.TopAppEnergy(
+                HistoryDatabase.TopAppEnergy(
                     bundleIdentifier: $0.bundleIdentifier,
                     processName: $0.processName,
                     path: $0.path,
-                    totalEnergyNJ: $0.totalEnergyNJ
+                    totalEnergyNJ: $0.totalEnergyNJ, totalCPUNS: $0.totalCPUNS
                 )
             }
             self.topApps = Array(userTop)
             let systemEntries = breakdown.filter { $0.isSystem }
             let systemTop = systemEntries.prefix(5).map {
-                AppDatabase.TopAppEnergy(
+                HistoryDatabase.TopAppEnergy(
                     bundleIdentifier: $0.bundleIdentifier,
                     processName: $0.processName,
                     path: $0.path,
-                    totalEnergyNJ: $0.totalEnergyNJ
+                    totalEnergyNJ: $0.totalEnergyNJ, totalCPUNS: $0.totalCPUNS
                 )
             }
             self.systemSummary = SystemAppSummary(
@@ -271,8 +293,31 @@ final class AppState: ObservableObject {
             if let active = try? await db.bucketSamplerActive(withinMinutes: 5) {
                 self.bucketSamplerActive = active
             }
+            self.unreadableProcessCount = Int(try await db.latestCoverage()?.unreadable ?? 0)
+            await refreshLegacyImportStatus()
         } catch {
             // Ignore transient read errors; UI will retry on next tick.
+        }
+    }
+
+    func refreshLegacyImportStatus() async {
+        guard let db = database else { return }
+        legacyImportStatus = try? await db.importStatus()
+    }
+
+    func setRawRetentionDays(_ days: Int) {
+        guard let database else { return }
+        Task {
+            try? await database.setRawRetentionDays(days)
+            await MainActor.run { self.rawRetentionDays = days }
+        }
+    }
+
+    func deleteLegacyDatabaseNow() {
+        guard let database, let url = try? AppPaths.databaseURL(), legacyImportStatus?.state == .done else { return }
+        Task {
+            do { try await database.deleteLegacyDatabaseImmediately(at: url) }
+            catch { statusText = "Old database could not be deleted: \(error.localizedDescription)" }
         }
     }
 }

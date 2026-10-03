@@ -340,8 +340,7 @@ Settings is not placed in that menu.
 
 ### Settings window
 
-Settings is a native macOS window with no sidebar and a content size of
-approximately 420 × 160 pt. General contains one control:
+Settings is a native macOS window with no sidebar. General contains app startup and local history controls:
 
 - `Launch at login`
 - `Start Voltscope in the menu bar when you sign in.`
@@ -391,3 +390,24 @@ visible Voltscope uses regular activation and can appear in the Dock. When the
 last user-visible window closes, it returns to accessory activation. A login
 launch with no visible window therefore remains accessory-only while sampling
 continues.
+
+
+## 0.10 — Tiered history presentation (current)
+
+Current CPU energy remains the charted value. When an interval contains older
+metric-version data, the corresponding chart buckets use an orange background
+marker. Hover identifies those buckets as recorded with an older method. The
+nearby note explains that earlier data used an older method and is not added to
+current readings. The chart and hardware breakdown query current-version energy
+by default.
+
+On Intel Macs, app energy is unavailable. The app list and menu panel rank apps
+by CPU time and show CPU time values; they do not show a zero-joule reading. The
+History window states that Intel Mac computers do not provide per-process
+energy data. After each process scan, History can show how many system processes
+could not be read.
+
+Settings includes raw-detail retention with 2, 7, 14, and 30 day choices
+(default 7 days). It shows legacy import status and progress where available,
+and the automatic deletion date after verification. `Delete old database now`
+is enabled only after import verification is complete.

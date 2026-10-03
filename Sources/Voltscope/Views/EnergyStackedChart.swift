@@ -36,6 +36,15 @@ struct EnergyStackedChart: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 6) {
                 Chart {
+                    ForEach(Array(model.legacyBuckets), id: \.self) { date in
+                        RectangleMark(
+                            xStart: .value("Older method start", date),
+                            xEnd: .value("Older method end", date.addingTimeInterval(Double(bucketSeconds))),
+                            yStart: .value("Older method", 0), yEnd: .value("Older method", model.upper)
+                        )
+                        .foregroundStyle(.orange.opacity(0.18))
+                        .accessibilityLabel("Data recorded with an older method")
+                    }
                     ForEach(model.segments) { p in
                         RectangleMark(
                             xStart: .value("Start", p.date.addingTimeInterval(Double(bucketSeconds) * 0.035)),

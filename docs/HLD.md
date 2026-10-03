@@ -86,67 +86,42 @@
 
 ## Data Model
 
-The schema and storage design below will change in 0.10.0; the current physical
-schema is defined by the migrations in `AppDatabase.swift`.
+The current store is `history.sqlite`, opened as a GRDB `DatabasePool` with WAL
+and incremental auto-vacuum. It sits in Voltscope's Application Support
+folder. The former `db.sqlite` is read-only migration input and is never used
+for new samples.
 
-The database is stored at `~/Library/Application Support/Voltscope/db.sqlite`.
-WAL mode, foreign-key checks on, monthly `VACUUM` triggered during app idle.
+### Tiered history tables (current)
 
-### `EnergyHistory`
+- `App` and `Bucket` hold stable identities. App rows group by bundle identifier
+  when available and process name otherwise.
+- `AppSampleRaw` and `BucketSampleRaw` keep timestamped detail for the configured
+  raw retention period. App rows carry `metricVersion`, `energyNJ`, `cpuNs`, IO
+  counters, PID, and parent PID. A tick also writes one `Coverage` row.
+- `AppUsageMinute` / `BucketMinute` are retained for 30 days. `AppUsageHour` /
+  `BucketHour` and `CoverageHour` are retained indefinitely. Rollups preserve
+  metric versions and replace recomputed rows idempotently.
+- `BatteryStatus` and `PowerEvents` retain their legacy column shapes and are
+  copied into the new database during migration.
+- `Meta` stores rollup watermarks, migration state and cursor, and
+  `settings.rawRetentionDays`.
 
-The core per-process per-sample table. Each sample writes one row per running process; ~30 rows per sample on a typical machine.
+`EnergyMetric.currentVersion` is 1. Current samples use `ri_energy_nj`; CPU time
+converts `ri_user_time + ri_system_time` with the machine Mach timebase. Imported
+rows keep version 0 and their earlier energy values. Queries select one version
+at a time. On Intel, rows with CPU time and zero energy are retained to support
+CPU-time ranking; the interface reports energy as unavailable.
 
-| Field | Type | Notes |
-|-------|------|-------|
-| `sampleId` | INTEGER PK | Auto-increment |
-| `timestamp` | INTEGER | Unix epoch milliseconds |
-| `pid` | INTEGER | Process ID at sample time |
-| `bundleIdentifier` | TEXT | Reverse-DNS bundle ID; `NULL` for system processes without a bundle |
-| `processName` | TEXT | `proc_pidpath`-derived name |
-| `path` | TEXT | Full executable path |
-| `parentPid` | INTEGER | For grouping helper processes under their parent app |
-| `cpuUserNs` | INTEGER | `ri_user_time` in nanoseconds |
-| `cpuSystemNs` | INTEGER | `ri_system_time` in nanoseconds |
-| `energyNJ` | INTEGER | `ri_energy_nj` delta (nanojoules), hardware-estimated CPU energy |
-| `wakeups` | INTEGER | `ri_pkg_idle_wkups + ri_interrupt_wkups` |
-| `diskReadBytes` | INTEGER | `ri_diskio_bytesread` |
-| `diskWriteBytes` | INTEGER | `ri_diskio_byteswritten` |
-| `year` | INTEGER | Denormalized for `GROUP BY year, month, day` |
-| `month` | INTEGER | |
-| `day` | INTEGER | |
-| `hour` | INTEGER | |
-| `minute` | INTEGER | |
+### Legacy database migration
 
-Indexes: `(timestamp)`, `(bundleIdentifier, timestamp)`, `(year, month, day)`.
-
-### `BatteryStatus`
-
-System-level battery state. Sampling cadence follows the Battery Sampling Loop below.
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `timestamp` | INTEGER PK | Unix epoch ms |
-| `levelPercent` | REAL | `kIOPSCurrentCapacityKey / kIOPSMaxCapacityKey` |
-| `capacityMAh` | INTEGER | Current charge mAh |
-| `designMAh` | INTEGER | Design capacity (constant per battery) |
-| `cycleCount` | INTEGER | `BatteryCycleCount` from `AppleSmartBattery` IORegistry |
-| `voltageMV` | INTEGER | Millivolts |
-| `amperageMA` | INTEGER | Milliamps, signed (positive = charging) |
-| `temperatureC` | REAL | Battery temperature |
-| `timeRemainingMin` | INTEGER | macOS estimate; `NULL` if "calculating" |
-| `isCharging` | INTEGER | 0 or 1 |
-| `isACPlugged` | INTEGER | 0 or 1 |
-
-### `PowerEvents`
-
-Discrete events: sleep, wake, AC plug/unplug, low-power-mode toggle.
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `timestamp` | INTEGER PK | Unix epoch ms |
-| `eventType` | TEXT | `'sleep'`, `'wake'`, `'plug'`, `'unplug'`, `'lowpower_on'`, `'lowpower_off'` |
-| `durationSeconds` | INTEGER | Pairing column for sleep→wake span; `NULL` for instantaneous events |
-| `metadata` | TEXT | JSON for extra fields (e.g. wake reason from `pmset -g log`) |
+At launch, sampling begins against `history.sqlite` immediately. If an old
+`db.sqlite` exists and migration is incomplete, `LegacyDatabaseImporter` runs
+as a background task. It reads the source in read-only, hour-sized transactions,
+records a resumable cursor, verifies energy and battery counts, and then marks
+the migration complete. A completed source is eligible for automatic deletion
+seven days after completion; Settings also offers immediate deletion only after
+verification succeeds. A failed import keeps the source file and the app
+continues on the new store.
 
 ### `EnergyBaseline` (v1.5)
 
@@ -185,13 +160,18 @@ Populated only when helper is installed. Contains powermetrics-derived joule rat
 
 ### Sampling Loop (foreground, every 5s)
 
-1. Timer fires.
-2. Call `proc_listallpids` → array of active PIDs.
-3. For each PID: call `proc_pid_rusage(pid, RUSAGE_INFO_V6, &rusage)`. Count `EPERM` as unreadable coverage; other errors such as `ESRCH` are transient exits and are not counted.
-4. Resolve bundle identifier: `NSRunningApplication(processIdentifier:)?.bundleIdentifier` if present, else `proc_pidpath` + parsing.
-5. Convert `ri_user_time` and `ri_system_time` from mach timebase ticks to nanoseconds and compute `ri_energy_nj` deltas. First sample after process start is skipped (no baseline); zero-energy deltas emit no row.
-6. Open GRDB write transaction; insert N rows with shared `timestamp`.
-7. Check retention threshold; trigger background compaction job if needed.
+1. Call `proc_listallpids`; read accessible processes through
+   `proc_pid_rusage(RUSAGE_INFO_V6)` and count permission-denied processes.
+2. Resolve app identity, convert CPU counters from Mach timebase ticks to
+   nanoseconds, and calculate `ri_energy_nj` deltas. First observations establish
+   baselines; rows without energy are retained only when CPU energy is
+   unavailable and CPU time moved.
+3. In one transaction, write process rows and a `Coverage` row to
+   `history.sqlite`. Hardware bucket deltas are written to the same database by
+   the bucket sampler.
+4. The existing five-minute checkpoint timer runs the maintenance phases:
+   minute rollup, hour rollup, retention pruning, and bounded incremental vacuum.
+   Each rollup is idempotent and advances its watermark with the transaction.
 
 ### Battery Sampling Loop (every 30s)
 
@@ -243,22 +223,11 @@ part of the current login-item setting and must not be used to implement it.
 
 ### Querying for the Main Chart
 
-For the "last 7 days, stacked by app" view:
-
-```sql
-SELECT
-    bundleIdentifier,
-    year, month, day, hour,
-    SUM(energyNJ) AS totalEnergyNJ
-FROM EnergyHistory
-WHERE timestamp >= ? AND timestamp < ?
-GROUP BY bundleIdentifier, year, month, day, hour
-ORDER BY day, hour;
-```
-
-Top-N apps determined by `SUM(energyNJ)` over the visible range. Apps outside the top N are bucketed into "Other" client-side.
-
----
+History queries route to raw samples, minute summaries, or hour summaries based
+on the selected window. The not-yet-rolled-up tail is aggregated from raw rows.
+Every app and hardware query filters one metric version; older-version buckets
+are queried separately for the visual method marker. CSV reads the raw tier and
+exports the same selectable window as the interface.
 
 ## Permissions Model
 

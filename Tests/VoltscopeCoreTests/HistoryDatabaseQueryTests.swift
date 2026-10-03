@@ -115,7 +115,8 @@ final class HistoryDatabaseQueryTests: XCTestCase {
         return groups.map { key, values in
             HistoryEnergyPoint(appID: key.appID, name: values[0].name, bundleIdentifier: key.appID,
                                path: key.appID.hasSuffix("alpha") ? "/Apps/Alpha.app" : "/Apps/Beta.app",
-                               isSystem: false, date: date(key.bucketMS), energyNJ: values.reduce(0) { $0 + $1.energy })
+                               isSystem: false, date: date(key.bucketMS), energyNJ: values.reduce(0) { $0 + $1.energy },
+                               cpuNS: values.reduce(0) { $0 + $1.energy * 2 })
         }.sorted { $0.date == $1.date ? $0.appID < $1.appID : $0.date < $1.date }
     }
 
@@ -231,6 +232,10 @@ final class HistoryDatabaseQueryTests: XCTestCase {
     }
 
     func testCSVQueryReturnsRawDetailColumnsFromAppDictionary() async throws {
+        XCTAssertEqual(HistoryDatabase.CSVSample.columnNames, [
+            "timestamp_ms", "iso8601", "pid", "parent_pid", "bundle_id", "process_name", "path",
+            "cpu_ns", "energy_nj", "wakeups", "disk_read_bytes", "disk_write_bytes", "metric_version"
+        ])
         let (db, raw, end) = try await fixture(.live)
         let samples = try await db.historySamplesForCSV(in: interval(0, end))
         XCTAssertEqual(samples.count, raw.count)

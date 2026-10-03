@@ -40,7 +40,9 @@ struct HistoryWindow: View {
                         BatteryHistoryChart(snapshots: data.battery, events: data.events, domain: data.domain, selection: nil)
                         HStack(spacing: 8) {
                             Text("App attribution").font(.callout.bold()).foregroundStyle(.secondary)
-                            Text("CPU portion only · \(range.rawValue) · \(String(format: "%.1f J", data.totalJ)) across \(data.apps.count) apps")
+                            Text(appState.processEnergyAvailable
+                                 ? "CPU portion only · \(range.rawValue) · \(String(format: "%.1f J", data.totalJ)) across \(data.apps.count) apps"
+                                 : "Intel Mac · ranked by CPU time")
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                             Spacer()
                             Text("J / \(range.bucketLabel)").font(.caption).foregroundStyle(.secondary)
@@ -50,6 +52,18 @@ struct HistoryWindow: View {
                             }
                         }
                         .help("Recorded CPU attribution only. Not a share of whole-device battery drain. Blank periods may be idle or missing observations; edge buckets may be partial.")
+                        if !appState.processEnergyAvailable {
+                            Text("Intel Mac computers do not provide per-process energy data.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        if !data.legacyBuckets.isEmpty {
+                            Text("Earlier data is marked in orange. Earlier data was recorded using an older method and is not added to current readings.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        if appState.unreadableProcessCount > 0 {
+                            Text("\(appState.unreadableProcessCount) system processes could not be read in the latest sample.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         EnergyStackedChart(model: model, bucketSeconds: range.bucketSeconds,
                                            xDomain: data.domain, selectedApp: $selectedApp)
                             .id(range)
@@ -60,7 +74,8 @@ struct HistoryWindow: View {
                                 bucketSeconds: range.bucketSeconds, bucketSamplerAvailable: !data.hardware.isEmpty || appState.bucketSamplerActive)
                                 .frame(maxWidth: .infinity, alignment: .topLeading)
                             Divider()
-                            AppBreakdownList(entries: data.apps.map(\.breakdownEntry), sparklines: data.sparklines, groupSystem: groupSystem)
+                            AppBreakdownList(entries: data.apps.map(\.breakdownEntry), sparklines: data.sparklines,
+                                             groupSystem: groupSystem, energyAvailable: appState.processEnergyAvailable)
                                 .frame(maxWidth: .infinity, alignment: .topLeading)
                         }
                     } else {
@@ -113,7 +128,8 @@ struct HistoryWindow: View {
 
     private func rebuildModel() {
         guard let data, loaded else { return }
-        model = HistoryChartModel(points: data.points, groupSystem: groupSystem, selectedApp: selectedApp)
+        model = HistoryChartModel(points: data.points, groupSystem: groupSystem, selectedApp: selectedApp,
+                                  legacyBuckets: Set(data.legacyBuckets))
     }
 
     private func loadData() async {
@@ -126,14 +142,17 @@ struct HistoryWindow: View {
         }
         let interval = DateInterval(start: start, end: end)
         do {
-            async let p = db.historyEnergy(in: interval, bucketSeconds: requestedRange.bucketSeconds)
+            async let p = db.historyEnergy(in: interval, range: requestedRange)
             async let b = db.batteryHistory(in: interval)
             async let e = db.historyEvents(in: interval)
-            async let h = db.historyHardware(in: interval, bucketSeconds: requestedRange.bucketSeconds)
-            let result = try await (p, b, e, h)
+            async let h = db.historyHardware(in: interval, range: requestedRange)
+            async let v = db.metricVersionCoverage(in: interval, range: requestedRange)
+            async let a = db.appBreakdown(sinceMinutes: requestedRange.minutes, energyAvailable: appState.processEnergyAvailable)
+            let result = try await (p, b, e, h, v, a)
             guard !Task.isCancelled, range == requestedRange else { return }
             let snapshot = HistorySnapshot(range: requestedRange, domain: start...end, points: result.0,
-                                           battery: result.1, events: result.2, hardware: result.3)
+                                           battery: result.1, events: result.2, hardware: result.3,
+                                           legacyBuckets: result.4.bucketStarts, appEntries: result.5)
             HistoryColors.register(snapshot.apps.map(\.id))
             cache[requestedRange] = snapshot
             data = snapshot
@@ -160,16 +179,18 @@ private struct HistorySnapshot {
     let points: [HistoryEnergyPoint]
     let battery: [BatterySnapshot]
     let events: [PowerEvent]
-    let hardware: [AppDatabase.BucketSummary]
+    let hardware: [HistoryDatabase.BucketSummary]
+    let legacyBuckets: [Date]
     let apps: [HistoryApp]
     let sparklines: [String: [SparkPoint]]
     let totalJ: Double
     let drainJ: Double
 
-    init(range: HistoryWindow.Range, domain: ClosedRange<Date>, points: [HistoryEnergyPoint], battery: [BatterySnapshot], events: [PowerEvent], hardware: [AppDatabase.BucketSummary]) {
+    init(range: HistoryWindow.Range, domain: ClosedRange<Date>, points: [HistoryEnergyPoint], battery: [BatterySnapshot], events: [PowerEvent], hardware: [HistoryDatabase.BucketSummary], legacyBuckets: [Date], appEntries: [HistoryDatabase.AppBreakdownEntry]) {
         self.range = range; self.domain = domain; self.points = points
-        self.battery = battery; self.events = events; self.hardware = hardware
-        apps = HistoryMath.apps(points)
+        self.battery = battery; self.events = events; self.hardware = hardware; self.legacyBuckets = legacyBuckets
+        apps = appEntries.map { HistoryApp(id: $0.id, name: $0.processName, bundleIdentifier: $0.bundleIdentifier,
+                                           path: $0.path, isSystem: $0.isSystem, energyNJ: $0.totalEnergyNJ, cpuNS: $0.totalCPUNS) }
         totalJ = Double(apps.reduce(0) { $0 + $1.energyNJ }) / 1e9
         drainJ = HistoryMath.drainJ(battery, within: DateInterval(start: domain.lowerBound, end: domain.upperBound))
         sparklines = Dictionary(grouping: points, by: \.appID).mapValues { rows in

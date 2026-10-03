@@ -5,12 +5,12 @@ public actor SamplingCoordinator {
     public static let batteryInterval: TimeInterval = 30.0
     public static let walCheckpointInterval: TimeInterval = 300.0
 
-    private let database: AppDatabase
+    private let database: HistoryDatabase
     private let processSampler: ProcessSampler
     private let batterySampler: BatterySampler
     private let bucketSampler: BucketSampler
 
-    /// Most recent process sampling coverage; persistence is owned by a later task.
+    /// Most recent process sampling coverage.
     public private(set) var latestProcessCoverage: ProcessCoverage?
 
     /// Whether this platform exposes per-process DPE energy counters.
@@ -27,7 +27,7 @@ public actor SamplingCoordinator {
     private var lastBatterySnapshot: BatterySnapshot?
 
     public init(
-        database: AppDatabase,
+        database: HistoryDatabase,
         processSampler: ProcessSampler = ProcessSampler(),
         batterySampler: BatterySampler = BatterySampler(),
         bucketSampler: BucketSampler = BucketSampler()
@@ -105,11 +105,33 @@ public actor SamplingCoordinator {
             visibleCount: result.visibleCount,
             unreadableCount: result.unreadableCount
         )
-        guard emit, !result.samples.isEmpty else { return 0 }
+        guard emit else { return 0 }
         do {
-            try await database.writeBatchSamples(result.samples)
+            let apps = result.samples.map { sample in
+                SampledApp(
+                    groupKey: sample.bundleIdentifier ?? sample.processName,
+                    bundleIdentifier: sample.bundleIdentifier,
+                    displayName: sample.processName,
+                    path: sample.path,
+                    pid: sample.pid,
+                    parentPid: sample.parentPid,
+                    energyNJ: sample.energyNJ,
+                    cpuNs: sample.cpuUserNs + sample.cpuSystemNs,
+                    wakeups: sample.wakeups,
+                    diskReadBytes: sample.diskReadBytes,
+                    diskWriteBytes: sample.diskWriteBytes
+                )
+            }
+            try await database.writeTick(
+                timestamp: result.samples.first?.timestamp ?? Int64(Date().timeIntervalSince1970 * 1000),
+                apps: apps,
+                buckets: [],
+                coverage: SampleCoverage(visible: Int64(result.visibleCount), unreadable: Int64(result.unreadableCount)),
+                metricVersion: EnergyMetric.currentVersion,
+                energyUnavailable: !processEnergyAvailable
+            )
         } catch {
-            logError("EnergySample batch insert failed: \(error)")
+            logError("History tick insert failed: \(error)")
         }
         return result.samples.count
     }
@@ -127,9 +149,9 @@ public actor SamplingCoordinator {
 
     private func runWALCheckpointTick() async {
         do {
-            try await database.runWALCheckpoint()
+            try await database.runMaintenance()
         } catch {
-            logError("WAL checkpoint failed: \(error)")
+            logError("History maintenance failed: \(error)")
         }
     }
 
@@ -137,11 +159,10 @@ public actor SamplingCoordinator {
     private func runBucketTick(emit: Bool) async -> Int {
         let rows = bucketSampler.sample()
         guard emit, !rows.isEmpty else { return 0 }
-        do {
-            try await database.writeBatchBuckets(rows)
-        } catch {
-            logError("SystemBucket batch insert failed: \(error)")
-        }
+        // The hardware sampler has its own counter baseline and writes its
+        // bucket deltas to the same history store.
+        do { try await database.writeBuckets(timestamp: rows[0].timestamp, buckets: rows.map { SampledBucket(name: $0.bucketName, energyNJ: $0.energyNJ) }) }
+        catch { logError("History bucket insert failed: \(error)") }
         return rows.count
     }
 
