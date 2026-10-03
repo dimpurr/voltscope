@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 0.10.0
+## 0.10.0 — 2026-10-03
 
 - Raw history and CSV now store one summed row per process/PID and UTC-aligned
   30-second window while sampling continues every five seconds. Minute summaries
