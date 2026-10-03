@@ -3,6 +3,37 @@ import GRDB
 import XCTest
 @testable import VoltscopeCore
 
+private final class CSVExportTaskBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<Void, Error>?
+    private var callbackCount = 0
+
+    func set(_ task: Task<Void, Error>) {
+        lock.lock()
+        self.task = task
+        lock.unlock()
+    }
+
+    func cancel() {
+        lock.lock()
+        let task = self.task
+        lock.unlock()
+        task?.cancel()
+    }
+
+    func recordCallback() {
+        lock.lock()
+        callbackCount += 1
+        lock.unlock()
+    }
+
+    var recordedCallbacks: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return callbackCount
+    }
+}
+
 final class HistoryDatabaseQueryTests: XCTestCase {
     private struct AppRollupKey: Hashable {
         let time: Int64
@@ -379,5 +410,100 @@ final class HistoryDatabaseQueryTests: XCTestCase {
 
         let exportedLine = sample.csvLine(iso8601: "1970-01-01T00:00:00.000Z")
         XCTAssertEqual(Array(exportedLine.utf8), Array("0,1970-01-01T00:00:00.000Z,11,,com.example.alpha,Alpha,/Apps/Alpha.app,14,7,1,21,28,1\n".utf8))
+    }
+
+    func testCSVBatchOutputMatchesLegacyArrayOutputByteForByte() async throws {
+        let (db, _, end) = try await fixture(.live)
+        let window = interval(0, end)
+        let header = HistoryDatabase.CSVSample.columnNames.joined(separator: ",") + "\n"
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let timestampDate: (Int64) -> Date = { Date(timeIntervalSince1970: Double($0) / 1000) }
+
+        let legacyRows = try db.dbPool.read { conn -> [Row] in
+            try Row.fetchAll(conn, sql: """
+                SELECT r.ts, r.pid, r.parentPid, a.bundleIdentifier, a.displayName AS processName, a.path,
+                       r.cpuNs, r.energyNJ, r.wakeups, r.diskReadBytes, r.diskWriteBytes, r.metricVersion
+                FROM AppSampleRaw r JOIN App a ON a.id = r.appId
+                WHERE r.ts >= ? AND r.ts < ? ORDER BY r.ts, r.appId, r.pid
+                """, arguments: [Int64(window.start.timeIntervalSince1970 * 1000),
+                                 Int64(window.end.timeIntervalSince1970 * 1000)])
+        }
+        var legacyOutput = header
+        for row in legacyRows {
+            guard let timestamp: Int64 = row["ts"], let pid: Int32 = row["pid"],
+                  let processName: String = row["processName"], let cpuNS: Int64 = row["cpuNs"],
+                  let energyNJ: Int64 = row["energyNJ"], let wakeups: Int64 = row["wakeups"],
+                  let read: Int64 = row["diskReadBytes"], let write: Int64 = row["diskWriteBytes"],
+                  let version: Int = row["metricVersion"] else { continue }
+            let sample = HistoryDatabase.CSVSample(
+                timestampMS: timestamp, iso8601: "", pid: pid, parentPid: row["parentPid"],
+                bundleID: row["bundleIdentifier"], processName: processName, path: row["path"],
+                cpuNS: cpuNS, energyNJ: energyNJ, wakeups: wakeups, diskReadBytes: read,
+                diskWriteBytes: write, metricVersion: version)
+            legacyOutput += sample.csvLine(iso8601: formatter.string(from: timestampDate(timestamp)))
+        }
+        var streamedOutput = header
+        var batchSizes: [Int] = []
+        try await db.forEachHistorySamplesForCSV(in: window, batchSize: 2) { batch in
+            batchSizes.append(batch.count)
+            streamedOutput += batch.map { sample in
+                sample.csvLine(iso8601: formatter.string(from: timestampDate(sample.timestampMS)))
+            }.joined()
+        }
+
+        XCTAssertEqual(Array(streamedOutput.utf8), Array(legacyOutput.utf8))
+        let expectedBatchSizes = Array(repeating: 2, count: legacyRows.count / 2)
+            + (legacyRows.count.isMultiple(of: 2) ? [] : [1])
+        XCTAssertEqual(batchSizes, expectedBatchSizes)
+    }
+
+    func testCSVCursorKeepsLargeResultSetWithinConfiguredBatchBound() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let appId = try await db.upsertApp(groupKey: "large-export", bundleIdentifier: nil,
+                                           displayName: "Large Export", path: "/Apps/Large.app", ts: 0)
+        let rowCount = 10_003
+        try await db.dbPool.write { conn in
+            for index in 0..<rowCount {
+                try AppSampleRaw(ts: Int64(index) * 30_000, appId: appId, pid: Int32(index % 32),
+                                 parentPid: nil, metricVersion: EnergyMetric.currentVersion,
+                                 energyNJ: 1, cpuNs: 2, wakeups: 1, diskReadBytes: 3,
+                                 diskWriteBytes: 4).insert(conn)
+            }
+        }
+
+        let batchLimit = 257
+        var batchCount = 0
+        var maximumBatchSize = 0
+        var exportedCount = 0
+        try await db.forEachHistorySamplesForCSV(in: interval(0, Int64(rowCount) * 30_000), batchSize: batchLimit) { batch in
+            batchCount += 1
+            maximumBatchSize = max(maximumBatchSize, batch.count)
+            exportedCount += batch.count
+        }
+
+        XCTAssertEqual(exportedCount, rowCount)
+        XCTAssertEqual(batchCount, (rowCount + batchLimit - 1) / batchLimit)
+        XCTAssertLessThanOrEqual(maximumBatchSize, batchLimit)
+        XCTAssertEqual(maximumBatchSize, batchLimit)
+    }
+
+    func testCSVBatchCallbackCancellationStopsCursor() async throws {
+        let (db, _, end) = try await fixture(.live)
+        let exportWindow = interval(0, end)
+        let taskBox = CSVExportTaskBox()
+        let task = Task {
+            try await db.forEachHistorySamplesForCSV(in: exportWindow, batchSize: 2) { _ in
+                taskBox.recordCallback()
+                taskBox.cancel()
+            }
+        }
+        taskBox.set(task)
+        do {
+            try await task.value
+            XCTFail("Expected task cancellation to stop the cursor")
+        } catch is CancellationError {
+            XCTAssertEqual(taskBox.recordedCallbacks, 1)
+        }
     }
 }

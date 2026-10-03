@@ -1,6 +1,14 @@
 import Foundation
 import GRDB
 
+private final class CSVBatchCallback: @unchecked Sendable {
+    let body: ([HistoryDatabase.CSVSample]) throws -> Void
+
+    init(_ body: @escaping ([HistoryDatabase.CSVSample]) throws -> Void) {
+        self.body = body
+    }
+}
+
 /// Queries over the tiered history store. All output dates use UTC epoch-aligned buckets.
 extension HistoryDatabase {
     public struct TopAppEnergy: Sendable, Equatable, Identifiable {
@@ -292,27 +300,51 @@ extension HistoryDatabase {
 
     /// Raw process samples for CSV export. The caller supplies the desired raw-retention interval.
     public func historySamplesForCSV(in interval: DateInterval) async throws -> [CSVSample] {
+        var samples: [CSVSample] = []
+        try await forEachHistorySamplesForCSV(in: interval) { batch in samples.append(contentsOf: batch) }
+        return samples
+    }
+
+    /// Visits raw CSV samples in bounded batches, in the same order as the legacy array query.
+    /// The callback runs on the database read queue and must not retain batches beyond its call.
+    public func forEachHistorySamplesForCSV(
+        in interval: DateInterval,
+        batchSize: Int = 512,
+        _ body: @escaping ([CSVSample]) throws -> Void
+    ) async throws {
+        precondition(batchSize > 0)
         let start = Self.epochMilliseconds(interval.start)
         let end = Self.epochMilliseconds(interval.end)
-        return try await dbPool.read { db in
+        let callback = CSVBatchCallback(body)
+        try await dbPool.read { db in
             let isoFormatter = ISO8601DateFormatter()
-            let rows = try Row.fetchAll(db, sql: """
+            let rows = try Row.fetchCursor(db, sql: """
                 SELECT r.ts, r.pid, r.parentPid, a.bundleIdentifier, a.displayName AS processName, a.path,
                        r.cpuNs, r.energyNJ, r.wakeups, r.diskReadBytes, r.diskWriteBytes, r.metricVersion
                 FROM AppSampleRaw r JOIN App a ON a.id = r.appId
                 WHERE r.ts >= ? AND r.ts < ? ORDER BY r.ts, r.appId, r.pid
                 """, arguments: [start, end])
-            return rows.compactMap { row in
+            var batch: [CSVSample] = []
+            batch.reserveCapacity(batchSize)
+            while let row = try rows.next() {
+                try Task.checkCancellation()
                 guard let timestamp: Int64 = row["ts"], let pid: Int32 = row["pid"],
                       let processName: String = row["processName"], let cpuNS: Int64 = row["cpuNs"],
                       let energyNJ: Int64 = row["energyNJ"], let wakeups: Int64 = row["wakeups"],
                       let read: Int64 = row["diskReadBytes"], let write: Int64 = row["diskWriteBytes"],
-                      let version: Int = row["metricVersion"] else { return nil }
-                return CSVSample(timestampMS: timestamp, iso8601: isoFormatter.string(from: Date(timeIntervalSince1970: Double(timestamp) / 1000)),
-                                 pid: pid, parentPid: row["parentPid"], bundleID: row["bundleIdentifier"], processName: processName,
-                                 path: row["path"], cpuNS: cpuNS, energyNJ: energyNJ, wakeups: wakeups,
-                                 diskReadBytes: read, diskWriteBytes: write, metricVersion: version)
+                      let version: Int = row["metricVersion"] else { continue }
+                batch.append(CSVSample(timestampMS: timestamp,
+                                       iso8601: isoFormatter.string(from: Date(timeIntervalSince1970: Double(timestamp) / 1000)),
+                                       pid: pid, parentPid: row["parentPid"], bundleID: row["bundleIdentifier"], processName: processName,
+                                       path: row["path"], cpuNS: cpuNS, energyNJ: energyNJ, wakeups: wakeups,
+                                       diskReadBytes: read, diskWriteBytes: write, metricVersion: version))
+                if batch.count == batchSize {
+                    try callback.body(batch)
+                    batch.removeAll(keepingCapacity: true)
+                }
             }
+            try Task.checkCancellation()
+            if !batch.isEmpty { try callback.body(batch) }
         }
     }
 

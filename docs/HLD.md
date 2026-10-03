@@ -273,8 +273,11 @@ are queried separately for the visual method marker. CSV reads the raw tier and
 exports the same selectable window as the interface. The shortest chart range
 uses raw; intermediate ranges, including the full-day view, use minute
 summaries; the week view uses permanent hour summaries. Range names and bucket
-widths are owned by [UI_SPEC.md](UI_SPEC.md). Two-day minute retention leaves
-a full day of margin for the full-day query.
+widths are owned by [UI_SPEC.md](UI_SPEC.md). CSV uses an ordered raw database
+cursor and writes fixed-size batches so export memory does not grow with the
+selected interval. Cancellation stops cursor iteration and removes the
+incomplete output file. Two-day minute retention leaves a full day of margin
+for the full-day query.
 
 Before returning app chart points, query results with the same inferred CLI
 identity are combined per bucket across raw, minute, and hour tiers. The exact

@@ -244,7 +244,7 @@ fails if this table drifts from the code
 |---|---|---|
 | Range picker (segmented) | `.principal` | Options, windows, and bucket widths are the generated table under [Range selector](#range-selector) |
 | `Display` Menu (`slider.horizontal.3`) | `.principal` (right of picker) | macOS "View Options" idiom — opens a menu with checkmark items. Currently holds `Group system processes`; future toggles (event markers, sparkline visibility, top-N count) extend here without burning toolbar real estate. *Replaces v0.5.1's label-less Toggle.* |
-| `Export as CSV…` | `.primaryAction` | Format named in the button so users know the output type before clicking. The save panel title also reads `Export Energy History as CSV`. |
+| `Export as CSV…` | `.primaryAction` | Format named in the button so users know the output type before clicking. The save panel title also reads `Export Energy History as CSV`. While writing, the action becomes `Cancel Export`; a failed or cancelled write removes its incomplete file. |
 
 ### Accessibility identifiers
 

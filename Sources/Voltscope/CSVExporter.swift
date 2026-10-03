@@ -30,6 +30,7 @@ enum CSVExporter {
         do {
             try await writeCSV(database: database, interval: exportInterval, to: url)
         } catch {
+            if error is CancellationError { return }
             let alert = NSAlert()
             alert.messageText = "Export failed"
             alert.informativeText = error.localizedDescription
@@ -39,26 +40,42 @@ enum CSVExporter {
     }
 
     private static func writeCSV(database: HistoryDatabase, interval: DateInterval, to url: URL) async throws {
-        FileManager.default.createFile(atPath: url.path, contents: nil)
-        guard let handle = try? FileHandle(forWritingTo: url) else {
-            throw NSError(
-                domain: "Voltscope.CSVExporter",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Could not open output file."]
-            )
-        }
-        defer { try? handle.close() }
+        let temporaryURL = url.deletingLastPathComponent()
+            .appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).partial")
+        do {
+            guard FileManager.default.createFile(atPath: temporaryURL.path, contents: nil),
+                  let handle = try? FileHandle(forWritingTo: temporaryURL) else {
+                throw NSError(domain: "Voltscope.CSVExporter", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "Could not open output file."])
+            }
+            do {
+                let header = HistoryDatabase.CSVSample.columnNames.joined(separator: ",") + "\n"
+                try handle.write(contentsOf: Data(header.utf8))
 
-        let header = HistoryDatabase.CSVSample.columnNames.joined(separator: ",") + "\n"
-        try handle.write(contentsOf: Data(header.utf8))
+                let isoFormatter = ISO8601DateFormatter()
+                isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
-        let isoFormatter = ISO8601DateFormatter()
-        isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-        let samples = try await database.historySamplesForCSV(in: interval)
-        for sample in samples {
-            let iso = isoFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(sample.timestampMS) / 1000.0))
-            try handle.write(contentsOf: Data(sample.csvLine(iso8601: iso).utf8))
+                try await database.forEachHistorySamplesForCSV(in: interval) { batch in
+                    for sample in batch {
+                        try Task.checkCancellation()
+                        let iso = isoFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(sample.timestampMS) / 1000.0))
+                        try handle.write(contentsOf: Data(sample.csvLine(iso8601: iso).utf8))
+                    }
+                }
+                try Task.checkCancellation()
+                try handle.close()
+                if FileManager.default.fileExists(atPath: url.path) {
+                    _ = try FileManager.default.replaceItemAt(url, withItemAt: temporaryURL)
+                } else {
+                    try FileManager.default.moveItem(at: temporaryURL, to: url)
+                }
+            } catch {
+                try? handle.close()
+                throw error
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: temporaryURL)
+            throw error
         }
     }
 }

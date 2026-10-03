@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Stream CSV exports through a bounded database cursor and fixed-size batches; exports can be cancelled and incomplete files are removed on failure.
 - Reduce per-window history flush work by resolving each distinct app group once.
 - Group bundle-less, version-named CLI processes only under
   `<name>/versions/<version>` paths. History queries also combine matching

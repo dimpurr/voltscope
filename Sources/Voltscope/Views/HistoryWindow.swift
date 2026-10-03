@@ -11,6 +11,7 @@ struct HistoryWindow: View {
     @State private var selectedApp: String?
     @State private var groupSystem = true
     @State private var isExporting = false
+    @State private var exportTask: Task<Void, Never>?
     @State private var errorMessage: String?
     @State private var rangeManuallyChosen = false
 
@@ -131,9 +132,14 @@ struct HistoryWindow: View {
                 .accessibilityIdentifier(AccessibilityIdentifiers.historyDisplayOptions)
         }
         ToolbarItem(placement: .primaryAction) {
-            Button { exportCurrent() } label: { Label("Export as CSV…", systemImage: "square.and.arrow.up") }
-                .disabled(isExporting || !loaded || appState.database == nil)
-                .accessibilityLabel("Export as CSV")
+            Button {
+                if isExporting { exportTask?.cancel() } else { exportCurrent() }
+            } label: {
+                Label(isExporting ? "Cancel Export" : "Export as CSV…",
+                      systemImage: isExporting ? "xmark.circle" : "square.and.arrow.up")
+            }
+                .disabled(!isExporting && (!loaded || appState.database == nil))
+                .accessibilityLabel(isExporting ? "Cancel CSV export" : "Export as CSV")
                 .accessibilityIdentifier(AccessibilityIdentifiers.historyExportCSV)
         }
     }
@@ -179,9 +185,12 @@ struct HistoryWindow: View {
     private func exportCurrent() {
         guard let db = appState.database, let data, loaded else { return }
         isExporting = true
-        Task { @MainActor in
+        exportTask = Task { @MainActor in
+            defer {
+                isExporting = false
+                exportTask = nil
+            }
             await CSVExporter.exportEnergyHistory(database: db, interval: DateInterval(start: data.domain.lowerBound, end: data.domain.upperBound))
-            isExporting = false
         }
     }
 }
