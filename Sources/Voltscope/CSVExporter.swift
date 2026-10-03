@@ -58,31 +58,7 @@ enum CSVExporter {
         let samples = try await database.historySamplesForCSV(in: interval)
         for sample in samples {
             let iso = isoFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(sample.timestampMS) / 1000.0))
-            let fields: [String] = [
-                String(sample.timestampMS),
-                iso,
-                String(sample.pid),
-                sample.parentPid.map(String.init) ?? "",
-                csvEscape(sample.bundleID ?? ""),
-                csvEscape(sample.processName),
-                csvEscape(sample.path ?? ""),
-                String(sample.cpuNS),
-                String(sample.energyNJ),
-                String(sample.wakeups),
-                String(sample.diskReadBytes),
-                String(sample.diskWriteBytes),
-                String(sample.metricVersion)
-            ]
-            let line = fields.joined(separator: ",") + "\n"
-            try handle.write(contentsOf: Data(line.utf8))
+            try handle.write(contentsOf: Data(sample.csvLine(iso8601: iso).utf8))
         }
-    }
-
-    private static func csvEscape(_ field: String) -> String {
-        if field.contains(",") || field.contains("\"") || field.contains("\n") {
-            let escaped = field.replacingOccurrences(of: "\"", with: "\"\"")
-            return "\"\(escaped)\""
-        }
-        return field
     }
 }

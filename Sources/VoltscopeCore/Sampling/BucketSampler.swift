@@ -89,7 +89,7 @@ public final class BucketSampler: @unchecked Sendable {
         if lower.contains("ecpm") || lower.contains("pcpm") || lower.contains("cpm") { return "Power Mgmt" }
         if isCPUSummary(name) || isCPUFamily(name) { return "CPU" }
         if name.caseInsensitiveCompare("GPU Energy") == .orderedSame || isGPUCore(name) { return "GPU" }
-        if lower == "gpu sram" || lower.range(of: #"^gpu sram\d+(?:_\d+)?$"#, options: .regularExpression) != nil { return "GPU SRAM" }
+        if lower.range(of: #"^gpu(?: .+)? sram.*$"#, options: .regularExpression) != nil { return "GPU SRAM" }
         if lower.contains("ane") { return "ANE" }
         if lower.contains("ave") { return "Video" }
         if lower.contains("isp") { return "Camera" }

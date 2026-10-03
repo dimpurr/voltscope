@@ -167,6 +167,24 @@ extension HistoryDatabase {
         public let diskReadBytes: Int64
         public let diskWriteBytes: Int64
         public let metricVersion: Int
+
+        /// Serializes one row using the timestamp representation selected by the exporter.
+        public func csvLine(iso8601: String) -> String {
+            [
+                String(timestampMS), iso8601, String(pid), parentPid.map(String.init) ?? "",
+                Self.csvEscape(bundleID ?? ""), Self.csvEscape(processName), Self.csvEscape(path ?? ""),
+                String(cpuNS), String(energyNJ), String(wakeups), String(diskReadBytes),
+                String(diskWriteBytes), String(metricVersion)
+            ].joined(separator: ",") + "\n"
+        }
+
+        private static func csvEscape(_ field: String) -> String {
+            if field.contains(",") || field.contains("\"") || field.contains("\n") {
+                let escaped = field.replacingOccurrences(of: "\"", with: "\"\"")
+                return "\"\(escaped)\""
+            }
+            return field
+        }
     }
 
     /// Returns per-app energy points with the same shape as the existing History chart query.
@@ -271,6 +289,7 @@ extension HistoryDatabase {
         let start = Self.epochMilliseconds(interval.start)
         let end = Self.epochMilliseconds(interval.end)
         return try await dbPool.read { db in
+            let isoFormatter = ISO8601DateFormatter()
             let rows = try Row.fetchAll(db, sql: """
                 SELECT r.ts, r.pid, r.parentPid, a.bundleIdentifier, a.displayName AS processName, a.path,
                        r.cpuNs, r.energyNJ, r.wakeups, r.diskReadBytes, r.diskWriteBytes, r.metricVersion
@@ -283,7 +302,7 @@ extension HistoryDatabase {
                       let energyNJ: Int64 = row["energyNJ"], let wakeups: Int64 = row["wakeups"],
                       let read: Int64 = row["diskReadBytes"], let write: Int64 = row["diskWriteBytes"],
                       let version: Int = row["metricVersion"] else { return nil }
-                return CSVSample(timestampMS: timestamp, iso8601: Self.iso8601(timestamp),
+                return CSVSample(timestampMS: timestamp, iso8601: isoFormatter.string(from: Date(timeIntervalSince1970: Double(timestamp) / 1000)),
                                  pid: pid, parentPid: row["parentPid"], bundleID: row["bundleIdentifier"], processName: processName,
                                  path: row["path"], cpuNS: cpuNS, energyNJ: energyNJ, wakeups: wakeups,
                                  diskReadBytes: read, diskWriteBytes: write, metricVersion: version)
@@ -311,10 +330,6 @@ private extension HistoryDatabase {
     }
 
     static func epochMilliseconds(_ date: Date) -> Int64 { Int64(date.timeIntervalSince1970 * 1000) }
-
-    static func iso8601(_ timestamp: Int64) -> String {
-        ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: Double(timestamp) / 1000))
-    }
 
     /// The tail cutoff for the finest tier in use. Legacy rows are sealed by
     /// the importer's own marks, while the current version follows the rollup

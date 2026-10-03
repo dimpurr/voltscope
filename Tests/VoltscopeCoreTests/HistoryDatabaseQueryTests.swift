@@ -309,6 +309,7 @@ final class HistoryDatabaseQueryTests: XCTestCase {
         XCTAssertEqual(samples.count, raw.count)
         let sample = try XCTUnwrap(samples.first)
         XCTAssertEqual(sample.timestampMS, 0)
+        XCTAssertEqual(Array(sample.iso8601.utf8), Array("1970-01-01T00:00:00Z".utf8))
         XCTAssertEqual(sample.pid, 11)
         XCTAssertNil(sample.parentPid)
         XCTAssertEqual(sample.bundleID, "com.example.alpha")
@@ -321,5 +322,8 @@ final class HistoryDatabaseQueryTests: XCTestCase {
         XCTAssertEqual(sample.diskWriteBytes, 28)
         XCTAssertEqual(sample.metricVersion, EnergyMetric.currentVersion)
         XCTAssertTrue(sample.iso8601.hasSuffix("Z"))
+
+        let exportedLine = sample.csvLine(iso8601: "1970-01-01T00:00:00.000Z")
+        XCTAssertEqual(Array(exportedLine.utf8), Array("0,1970-01-01T00:00:00.000Z,11,,com.example.alpha,Alpha,/Apps/Alpha.app,14,7,1,21,28,1\n".utf8))
     }
 }

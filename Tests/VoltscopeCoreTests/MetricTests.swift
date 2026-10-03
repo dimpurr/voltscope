@@ -132,6 +132,10 @@ final class BucketDeduplicationTests: XCTestCase {
         XCTAssertEqual(BucketSampler.normalizeBucketName("GPU SRAM"), "GPU SRAM")
         XCTAssertEqual(BucketSampler.normalizeBucketName("GPU SRAM0"), "GPU SRAM")
         XCTAssertEqual(BucketSampler.normalizeBucketName("GPU SRAM0_0"), "GPU SRAM")
+        XCTAssertEqual(BucketSampler.normalizeBucketName("GPU CS SRAM0_0"), "GPU SRAM")
+        XCTAssertEqual(BucketSampler.normalizeBucketName("DIE_0_GPU CS SRAM0_0"), "GPU SRAM")
+        XCTAssertEqual(BucketSampler.normalizeBucketName("GPU Energy"), "GPU")
+        XCTAssertEqual(BucketSampler.normalizeBucketName("GPU0_0"), "GPU")
         XCTAssertEqual(BucketSampler.selectedChannelNames(["GPU Energy", "GPU0", "GPU SRAM", "GPU SRAM0"]),
                        ["GPU Energy", "GPU SRAM", "GPU SRAM0"])
     }
