@@ -63,8 +63,9 @@ struct BatteryHistoryChart: View {
     private var accessibilityPoints: [HistoryChartAccessibility.Point] {
         snapshots.compactMap { snapshot in
             guard let level = snapshot.levelPercent else { return nil }
-            return HistoryChartAccessibility.Point(date: Date(timeIntervalSince1970: Double(snapshot.timestamp) / 1000),
-                                                   value: min(100, max(0, level)))
+            let date = Date(timeIntervalSince1970: Double(snapshot.timestamp) / 1000)
+            guard domain.contains(date) else { return nil }
+            return HistoryChartAccessibility.Point(date: date, value: min(100, max(0, level)))
         }
     }
 
@@ -75,7 +76,7 @@ struct BatteryHistoryChart: View {
     }
 
     private var chartDescriptor: HistoryAXChartDescriptor {
-        let grouped = Dictionary(grouping: levels, by: \.segment)
+        let grouped = Dictionary(grouping: levels.filter { domain.contains($0.date) }, by: \.segment)
         let series = grouped.keys.sorted().map { segment in
             HistoryAXSeries(name: "Battery level segment \(segment + 1)",
                             points: grouped[segment, default: []].map {

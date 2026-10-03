@@ -11,7 +11,7 @@ public enum HistoryChartAccessibility {
     public static func summary(title: String, range: ClosedRange<Date>, points: [Point], unit: String,
                                bucketSeconds: Int? = nil, hasMissingIntervals: Bool = false, mixedMetricVersions: Bool = false,
                                scopeNote: String? = nil) -> String {
-        let ordered = points.sorted { $0.date < $1.date }
+        let ordered = points.filter { range.contains($0.date) }.sorted { $0.date < $1.date }
         let rangeText = "\(range.lowerBound.formatted(date: .abbreviated, time: .shortened)) to \(range.upperBound.formatted(date: .abbreviated, time: .shortened))"
         var parts = [title, "range \(rangeText)"]
         guard !ordered.isEmpty else {

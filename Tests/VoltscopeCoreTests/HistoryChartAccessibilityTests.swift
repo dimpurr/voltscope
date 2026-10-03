@@ -53,4 +53,20 @@ final class HistoryChartAccessibilityTests: XCTestCase {
         XCTAssertTrue(summary.contains("Older metric-version data is marked separately and is not combined with current data."))
         XCTAssertTrue(summary.contains("not whole-device battery drain"))
     }
+
+    func testBatterySummaryExcludesFlatPredecessorOutsideSelectedRange() {
+        let range = date(90)...date(210)
+        let predecessor = date(0)
+        let summary = HistoryChartAccessibility.summary(
+            title: "Battery level", range: range,
+            points: [.init(date: predecessor, value: 50),
+                     .init(date: date(90), value: 50),
+                     .init(date: date(210), value: 50)],
+            unit: "percent", bucketSeconds: 30
+        )
+
+        XCTAssertFalse(summary.contains(predecessor.formatted(date: .abbreviated, time: .shortened)))
+        XCTAssertTrue(summary.contains(date(90).formatted(date: .abbreviated, time: .shortened)))
+        XCTAssertTrue(summary.contains(date(210).formatted(date: .abbreviated, time: .shortened)))
+    }
 }
