@@ -123,7 +123,13 @@ match entirely numeric components separated by dots, with at least one dot
 when re-reading rows written by this rule. Starting at its parent, skip generic
 packaging directories (`versions`, `version`, `bin`, `sbin`, `lib`, `libexec`,
 `Contents`, `MacOS`, and `current`) and use the nearest remaining directory
-name as a lowercase identity slug. The slug is the `cli:<slug>` App `groupKey`;
+name as a lowercase identity slug only when that directory is not a shared
+location. Generic locations such as `usr`, `local`, `opt`, `homebrew`, `share`,
+`.local`, `Applications`, `Library`, `Cellar`, `Helpers`, `Frameworks`, `Users`,
+`home`, `tmp`, `private`, and `var` are rejected case-insensitively. A candidate
+whose parent is `Users` or `home` is also rejected case-insensitively. These
+locations are too broad to identify one program, so the existing process-name
+identity is retained. The slug is the `cli:<slug>` App `groupKey`;
 `claude` displays as `Claude Code`, and other slugs display as title-cased
 directory names.
 

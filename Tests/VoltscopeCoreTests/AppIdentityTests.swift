@@ -21,6 +21,30 @@ final class AppIdentityTests: XCTestCase {
         XCTAssertEqual(resolved.displayName, "Acme Tool")
     }
 
+    func testDoesNotGroupVersionsUnderSharedLocalDirectory() {
+        for version in ["1.0.0", "2.0.0"] {
+            XCTAssertNil(AppIdentity.versionedExecutableSlug(path: "/usr/local/bin/\(version)"))
+            XCTAssertEqual(AppIdentity.resolve(bundleIdentifier: nil, processName: version,
+                                               path: "/usr/local/bin/\(version)").groupKey, version)
+        }
+    }
+
+    func testDoesNotGroupVersionsUnderSharedUsrDirectory() {
+        XCTAssertNil(AppIdentity.versionedExecutableSlug(path: "/usr/bin/1.0.0"))
+        XCTAssertNil(AppIdentity.versionedExecutableSlug(path: "/usr/libexec/4.5.6"))
+        XCTAssertEqual(AppIdentity.resolve(bundleIdentifier: nil, processName: "1.0.0",
+                                           path: "/usr/bin/1.0.0").groupKey, "1.0.0")
+        XCTAssertEqual(AppIdentity.resolve(bundleIdentifier: nil, processName: "4.5.6",
+                                           path: "/usr/libexec/4.5.6").groupKey, "4.5.6")
+    }
+
+    func testDoesNotGroupUserDirectoryChildAsClaude() {
+        let path = "/Users/claude/bin/1.0.0"
+        XCTAssertNil(AppIdentity.versionedExecutableSlug(path: path))
+        XCTAssertEqual(AppIdentity.resolve(bundleIdentifier: nil, processName: "1.0.0", path: path),
+                       AppIdentity.Resolved(groupKey: "1.0.0", displayName: "1.0.0"))
+    }
+
     func testDoesNotInferForOrdinaryOrAmbiguousNamesAndPaths() {
         XCTAssertEqual(AppIdentity.resolve(bundleIdentifier: nil, processName: "claude",
                                            path: "/Users/example/.local/share/claude/bin/claude"),

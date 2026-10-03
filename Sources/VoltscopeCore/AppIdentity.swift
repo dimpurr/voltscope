@@ -11,6 +11,12 @@ public enum AppIdentity {
         "versions", "version", "bin", "sbin", "lib", "libexec", "contents", "macos", "current"
     ]
 
+    private static let sharedLocationDirectories: Set<String> = [
+        "usr", "local", "opt", "homebrew", "share", ".local", "applications", "library",
+        "cellar", "helpers", "frameworks", "users", "home", "tmp", "private", "var",
+        "etc", "system", "volumes", "resources", "support", "vendor"
+    ]
+
     /// Keeps bundle IDs authoritative and otherwise groups only numeric, dotted
     /// executable filenames under their nearest meaningful ancestor directory.
     public static func resolve(bundleIdentifier: String?, processName: String, path: String?) -> Resolved {
@@ -29,6 +35,7 @@ public enum AppIdentity {
     }
 
     /// Returns the normalized meaningful directory for a pure dotted numeric filename.
+    /// Shared locations and direct children of user roots are too broad to identify an app.
     public static func versionedExecutableSlug(path: String) -> String? {
         let executable = URL(fileURLWithPath: path).lastPathComponent
         let components = executable.split(separator: ".", omittingEmptySubsequences: false)
@@ -42,7 +49,13 @@ public enum AppIdentity {
             let name = directory.lastPathComponent
             guard !name.isEmpty, name != "/" else { return nil }
             if !containerDirectories.contains(name.lowercased()) {
-                return name.lowercased()
+                let normalizedName = name.lowercased()
+                let parentName = directory.deletingLastPathComponent().lastPathComponent.lowercased()
+                guard !sharedLocationDirectories.contains(normalizedName),
+                      parentName != "users", parentName != "home" else {
+                    return nil
+                }
+                return normalizedName
             }
             let parent = directory.deletingLastPathComponent()
             guard parent.path != directory.path else { return nil }
