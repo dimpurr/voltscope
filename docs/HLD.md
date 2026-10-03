@@ -120,28 +120,28 @@ Bundle IDs remain authoritative. For a process without a bundle ID, infer a
 stable CLI identity only when both the process name and executable filename
 match entirely numeric components separated by dots, with at least one dot
 (for example, `2.1.287`). The stored canonical display name is also accepted
-when re-reading rows written by this rule. Starting at its parent, skip generic
-packaging directories (`versions`, `version`, `bin`, `sbin`, `lib`, `libexec`,
-`Contents`, `MacOS`, and `current`) and use the nearest remaining directory
-name as a lowercase identity slug only when that directory is not a shared
-location. Generic locations such as `usr`, `local`, `opt`, `homebrew`, `share`,
-`.local`, `Applications`, `Library`, `Cellar`, `Helpers`, `Frameworks`, `Users`,
-`home`, `tmp`, `private`, and `var` are rejected case-insensitively. A candidate
-whose parent is `Users` or `home` is also rejected case-insensitively. These
-locations are too broad to identify one program, so the existing process-name
-identity is retained. The slug is the `cli:<slug>` App `groupKey`;
-`claude` displays as `Claude Code`, and other slugs display as title-cased
-directory names.
+when re-reading rows written by this rule. The executable path must have the
+exact shape `…/<name>/versions/<version>`: the executable's direct parent must
+be named `versions` case-insensitively, and `<name>` must be nonempty, not a
+dotted numeric version, and not a shared location. Do not skip or walk through
+other packaging directories. Shared names are rejected case-insensitively:
+`usr`, `local`, `opt`, `homebrew`, `share`, `.local`, `applications`,
+`application support`, `library`, `cellar`, `helpers`, `frameworks`, `users`,
+`home`, `tmp`, `private`, `var`, `etc`, `system`, `volumes`, `resources`,
+`support`, and `vendor`. Other path shapes keep the existing process-name
+identity. The slug is the `cli:<slug>` App `groupKey`; `claude` displays as
+`Claude Code`, and other slugs display as title-cased directory names.
 
 For example, `~/.local/share/claude/versions/2.1.286` and
 `~/.local/share/claude/versions/2.1.287` resolve to `cli:claude` / `Claude
-Code`. `/opt/acme-tool/bin/3.4.1` resolves to `cli:acme-tool` / `Acme Tool`.
+Code`. `/opt/acme-tool/bin/3.4.1` keeps the existing process-name identity
+because it is not in a `versions` directory.
 Names such as `claude`, `v2.1.287`, and `2.1-beta`, a missing path, or a path
-with no non-generic parent keep the existing process-name identity. This narrow
-rule avoids guessing from arbitrary executable names. Stable group keys also
-give all versions the same persisted chart color identity. A process matching
-this rule is classified as a user app; other bundle-less processes remain
-system-classified.
+with any other shape keep the existing process-name identity. This narrow rule
+avoids guessing from arbitrary executable names. Stable group keys also give
+all versions the same persisted chart color identity. A bundle-less process is
+classified as a user app only when the full identity resolution produces a
+`cli:` key; other bundle-less processes remain system-classified.
 
 Existing App and sample rows are not rewritten. History queries apply the same
 path rule to bundle-less version-named rows and add their energy and CPU within

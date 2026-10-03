@@ -14,11 +14,47 @@ final class AppIdentityTests: XCTestCase {
                        "cli:claude")
     }
 
-    func testGroupsGenericVersionedExecutableByMeaningfulParent() {
+    func testGroupsOnlyVersionedExecutableInsideNamedVersionsDirectory() {
+        let claude = AppIdentity.resolve(bundleIdentifier: nil, processName: "2.1.287",
+                                         path: "/opt/claude/versions/2.1.287")
+        XCTAssertEqual(claude.groupKey, "cli:claude")
+        XCTAssertEqual(claude.displayName, "Claude Code")
+
+        let caseInsensitive = AppIdentity.resolve(bundleIdentifier: nil, processName: "3.4.1",
+                                                  path: "/opt/acme-tool/VeRsIoNs/3.4.1")
+        XCTAssertEqual(caseInsensitive.groupKey, "cli:acme-tool")
+        XCTAssertEqual(caseInsensitive.displayName, "Acme Tool")
+    }
+
+    func testDoesNotGroupExecutableOutsideVersionsDirectory() {
         let resolved = AppIdentity.resolve(bundleIdentifier: nil, processName: "3.4.1",
                                            path: "/opt/acme-tool/bin/3.4.1")
-        XCTAssertEqual(resolved.groupKey, "cli:acme-tool")
-        XCTAssertEqual(resolved.displayName, "Acme Tool")
+        XCTAssertEqual(resolved, AppIdentity.Resolved(groupKey: "3.4.1", displayName: "3.4.1"))
+    }
+
+    func testRejectsReviewPathsOutsideExactVersionsShape() {
+        let paths = [
+            "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/14.1.1",
+            "/opt/homebrew/Cellar/fd/14.1.1/bin/14.1.1",
+            "/opt/2.1.287/bin/1.0.0",
+            "/tmp/2.1.287/bin/9.8.7",
+            "/Library/Application Support/bin/1.0.0",
+            "/Library/Application Support/bin/2.0.0",
+            "/usr/local/bin/1.0.0",
+            "/usr/local/bin/2.0.0",
+            "/usr/bin/1.0.0",
+            "/usr/libexec/4.5.6",
+            "/Users/claude/bin/1.0.0"
+        ]
+        for path in paths {
+            XCTAssertNil(AppIdentity.versionedExecutableSlug(path: path), "Unexpected CLI group for \(path)")
+        }
+    }
+
+    func testRejectsVersionShapedAndSharedAppNamesInsideVersionsDirectory() {
+        XCTAssertNil(AppIdentity.versionedExecutableSlug(path: "/opt/2.1.287/versions/1.0.0"))
+        XCTAssertNil(AppIdentity.versionedExecutableSlug(path: "/opt/Application Support/versions/1.0.0"))
+        XCTAssertNil(AppIdentity.versionedExecutableSlug(path: "/opt/application support/versions/1.0.0"))
     }
 
     func testDoesNotGroupVersionsUnderSharedLocalDirectory() {
@@ -72,6 +108,8 @@ final class AppIdentityTests: XCTestCase {
     func testRecognizedVersionedCLIIsClassifiedAsUserApp() {
         XCTAssertFalse(AppClassification.isSystem(bundleIdentifier: nil, processName: "2.1.287",
                                                   path: "/Users/example/.local/share/claude/versions/2.1.287"))
+        XCTAssertTrue(AppClassification.isSystem(bundleIdentifier: nil, processName: "worker",
+                                                 path: "/opt/tool/2.1.287"))
         XCTAssertTrue(AppClassification.isSystem(bundleIdentifier: nil, processName: "launchd",
                                                  path: "/sbin/launchd"))
     }
