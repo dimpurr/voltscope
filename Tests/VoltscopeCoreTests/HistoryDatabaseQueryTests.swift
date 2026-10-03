@@ -62,6 +62,7 @@ final class HistoryDatabaseQueryTests: XCTestCase {
         let appId: Int64
         let appKey: String
         let name: String
+        let path: String
         let pid: Int32
         let version: Int
         let energy: Int64
@@ -85,15 +86,15 @@ final class HistoryDatabaseQueryTests: XCTestCase {
         let beta = try await db.upsertApp(groupKey: "com.example.beta", bundleIdentifier: "com.example.beta", displayName: "Beta", path: "/Apps/Beta.app", ts: 0)
         let cpu = try await db.upsertBucket(name: "CPU")
         let gpu = try await db.upsertBucket(name: "GPU")
-        let points: [(Int64, Int64, String, String, Int32, Int64, Int64, String)] = [
-            (0, alpha, "com.example.alpha", "Alpha", 11, 7, cpu, "CPU"),
-            (35_000, alpha, "com.example.alpha", "Alpha", 11, 11, cpu, "CPU"),
-            (105_000, beta, "com.example.beta", "Beta", 22, 3, gpu, "GPU"),
-            (end / 3 + 15_000, alpha, "com.example.alpha", "Alpha", 11, 13, gpu, "GPU"),
-            (end - 120_000, beta, "com.example.beta", "Beta", 22, 17, cpu, "CPU"),
-            (end - 30_000, alpha, "com.example.alpha", "Alpha", 11, 19, cpu, "CPU")
+        let points: [(Int64, Int64, String, String, String, Int32, Int64, Int64, String)] = [
+            (0, alpha, "com.example.alpha", "Alpha", "/Apps/Alpha.app", 11, 7, cpu, "CPU"),
+            (35_000, alpha, "com.example.alpha", "Alpha", "/Apps/Alpha.app", 11, 11, cpu, "CPU"),
+            (105_000, beta, "com.example.beta", "Beta", "/Apps/Beta.app", 22, 3, gpu, "GPU"),
+            (end / 3 + 15_000, alpha, "com.example.alpha", "Alpha", "/Apps/Alpha.app", 11, 13, gpu, "GPU"),
+            (end - 120_000, beta, "com.example.beta", "Beta", "/Apps/Beta.app", 22, 17, cpu, "CPU"),
+            (end - 30_000, alpha, "com.example.alpha", "Alpha", "/Apps/Alpha.app", 11, 19, cpu, "CPU")
         ].filter { $0.0 >= 0 && $0.0 < end }
-        let rows = points.map { RawFixture(ts: $0.0, appId: $0.1, appKey: $0.2, name: $0.3, pid: $0.4, version: version, energy: $0.5, bucketId: $0.6, bucketName: $0.7) }
+        let rows = points.map { RawFixture(ts: $0.0, appId: $0.1, appKey: $0.2, name: $0.3, path: $0.4, pid: $0.5, version: version, energy: $0.6, bucketId: $0.7, bucketName: $0.8) }
         let watermark: Int64? = switch range {
         case .live: nil
         case .d7: seconds / 3600 - 2
@@ -145,7 +146,7 @@ final class HistoryDatabaseQueryTests: XCTestCase {
         let groups = Dictionary(grouping: rows.filter { $0.version == version }, by: { PointKey(appID: $0.appKey, bucketMS: ($0.ts / width) * width) })
         return groups.map { key, values in
             HistoryEnergyPoint(appID: key.appID, name: values[0].name, bundleIdentifier: key.appID,
-                               path: key.appID.hasSuffix("alpha") ? "/Apps/Alpha.app" : "/Apps/Beta.app",
+                               path: values[0].path,
                                isSystem: false, date: date(key.bucketMS), energyNJ: values.reduce(0) { $0 + $1.energy },
                                cpuNS: values.reduce(0) { $0 + $1.energy * 2 })
         }.sorted { $0.date == $1.date ? $0.appID < $1.appID : $0.date < $1.date }
@@ -165,27 +166,36 @@ final class HistoryDatabaseQueryTests: XCTestCase {
     func testTierSwitchBoundariesGapsIdentityAndMetricVersionsForEveryRange() async throws {
         for range in HistoryRange.allCases {
             let db = try HistoryDatabase.makeInMemory()
-            let appID = try await db.upsertApp(groupKey: "com.example.stable", bundleIdentifier: "com.example.stable",
-                                               displayName: "Stable App", path: "/Apps/Stable.app", ts: 0)
+            let firstAppID = try await db.upsertApp(groupKey: "com.example.stable.first", bundleIdentifier: "com.example.stable",
+                                                    displayName: "Stable App", path: "/Apps/Stable.app", ts: 0)
+            let secondAppID = try await db.upsertApp(groupKey: "com.example.stable.second", bundleIdentifier: "com.example.stable",
+                                                     displayName: "Stable App", path: "/Apps/Stable.app", ts: 0)
             let bucketID = try await db.upsertBucket(name: "CPU")
             let tierMS: Int64 = range == .d7 ? 3_600_000 : 60_000
             let start = 20 * 86_400_000 / tierMS * tierMS
+            let widthMS = Int64(range.bucketSeconds) * 1000
             let switchAt = start + 2 * tierMS
-            let end = start + 30 * tierMS
-            let currentRows: [(Int64, Int64, Int64)] = [
-                (start + 30_000, 3, 30),
-                (start + tierMS - 30_000, 5, 50),
-                (switchAt, 7, 70),
-                (switchAt + 30_000, 11, 110),
-                (start + 20 * tierMS, 13, 130)
+            let end = start + Int64(range.minutes) * 60_000
+            let lateTS = switchAt + 4 * widthMS
+            let currentRows: [(Int64, Int64, Int64, Int64)] = [
+                (start + 30_000, 3, 6, firstAppID),
+                (start + tierMS - 30_000, 5, 10, secondAppID),
+                (switchAt, 7, 14, firstAppID),
+                (switchAt + min(30_000, widthMS / 2), 11, 22, secondAppID),
+                (lateTS, 13, 26, firstAppID)
             ]
-            let legacyRows: [(Int64, Int64, Int64)] = [
-                (start + 45_000, 101, 1_010),
-                (switchAt + 45_000, 103, 1_030)
+            let legacyRows: [(Int64, Int64, Int64, Int64)] = [
+                (start + 45_000, 101, 1_010, firstAppID),
+                (switchAt + 45_000, 103, 1_030, firstAppID)
             ]
+            let currentFixtures = currentRows.map {
+                RawFixture(ts: $0.0, appId: $0.3, appKey: "com.example.stable", name: "Stable App",
+                           path: "/Apps/Stable.app", pid: 71, version: EnergyMetric.currentVersion,
+                           energy: $0.1, bucketId: bucketID, bucketName: "CPU")
+            }
             try await db.dbPool.write { conn in
-                for (ts, energy, cpu) in currentRows + legacyRows {
-                    let version = legacyRows.contains { $0.0 == ts } ? EnergyMetric.legacyVersion : EnergyMetric.currentVersion
+                for (ts, energy, cpu, appID) in currentRows + legacyRows {
+                    let version = currentRows.contains { $0.0 == ts } ? EnergyMetric.currentVersion : EnergyMetric.legacyVersion
                     try AppSampleRaw(ts: ts, appId: appID, pid: 71, parentPid: nil, metricVersion: version,
                                      energyNJ: energy, cpuNs: cpu, wakeups: 1,
                                      diskReadBytes: 0, diskWriteBytes: 0).insert(conn)
@@ -194,42 +204,48 @@ final class HistoryDatabaseQueryTests: XCTestCase {
 
                 if range != .live {
                     for version in [EnergyMetric.legacyVersion, EnergyMetric.currentVersion] {
-                        let values = (version == EnergyMetric.legacyVersion ? legacyRows : currentRows).filter { $0.0 < switchAt }
+                        let values = (version == EnergyMetric.legacyVersion ? legacyRows : currentRows)
+                        let watermark = switchAt / tierMS - (version == EnergyMetric.legacyVersion ? 2 : 1)
+                        let cutoff = (watermark + 1) * tierMS
+                        let covered = values.filter { $0.0 < cutoff }
                         guard !values.isEmpty else { continue }
-                        let energy = values.reduce(Int64(0)) { $0 + $1.1 }
-                        let cpu = values.reduce(Int64(0)) { $0 + $1.2 }
-                        let rollupTime = values[0].0 / tierMS
-                        if range == .d7 {
-                            try AppUsageHour(hour: rollupTime, appId: appID, metricVersion: version, energyNJ: energy,
-                                             cpuNs: cpu, wakeups: Int64(values.count), diskReadBytes: 0,
-                                             diskWriteBytes: 0, samples: Int64(values.count)).insert(conn)
-                        } else {
-                            try AppUsageMinute(minute: rollupTime, appId: appID, metricVersion: version, energyNJ: energy,
-                                               cpuNs: cpu, wakeups: Int64(values.count), diskReadBytes: 0,
-                                               diskWriteBytes: 0, samples: Int64(values.count)).insert(conn)
+                        let appGroups = Dictionary(grouping: covered, by: {
+                            AppRollupKey(time: $0.0 / tierMS, appId: $0.3, version: version)
+                        })
+                        for (key, samples) in appGroups {
+                            let energy = samples.reduce(Int64(0)) { $0 + $1.1 }
+                            let cpu = samples.reduce(Int64(0)) { $0 + $1.2 }
+                            if range == .d7 {
+                                try AppUsageHour(hour: key.time, appId: key.appId, metricVersion: version, energyNJ: energy,
+                                                 cpuNs: cpu, wakeups: Int64(samples.count), diskReadBytes: 0,
+                                                 diskWriteBytes: 0, samples: Int64(samples.count)).insert(conn)
+                            } else {
+                                try AppUsageMinute(minute: key.time, appId: key.appId, metricVersion: version, energyNJ: energy,
+                                                   cpuNs: cpu, wakeups: Int64(samples.count), diskReadBytes: 0,
+                                                   diskWriteBytes: 0, samples: Int64(samples.count)).insert(conn)
+                            }
                         }
-                        let bucketEnergy = values.reduce(Int64(0)) { $0 + $1.1 }
-                        if range == .d7 {
-                            try BucketHour(hour: rollupTime, bucketId: bucketID, metricVersion: version, energyNJ: bucketEnergy).insert(conn)
-                        } else {
-                            try BucketMinute(minute: rollupTime, bucketId: bucketID, metricVersion: version, energyNJ: bucketEnergy).insert(conn)
+                        let bucketGroups = Dictionary(grouping: covered, by: { BucketRollupKey(time: $0.0 / tierMS, bucketId: bucketID, version: version) })
+                        for (key, samples) in bucketGroups {
+                            let energy = samples.reduce(Int64(0)) { $0 + $1.1 }
+                            if range == .d7 {
+                                try BucketHour(hour: key.time, bucketId: key.bucketId, metricVersion: version, energyNJ: energy).insert(conn)
+                            } else {
+                                try BucketMinute(minute: key.time, bucketId: key.bucketId, metricVersion: version, energyNJ: energy).insert(conn)
+                            }
                         }
+                        let watermarkKey = range == .d7 ? "rollup.hourWatermark" : "rollup.minuteWatermark"
+                        let legacyWatermarkKey = range == .d7 ? "legacy.hourMark" : "legacy.minuteMark"
+                        let key = version == EnergyMetric.legacyVersion ? legacyWatermarkKey : watermarkKey
+                        try conn.execute(sql: "INSERT INTO Meta(key, value) VALUES (?, ?)", arguments: [key, String(watermark)])
                     }
-                    let watermarkKey = range == .d7 ? "rollup.hourWatermark" : "rollup.minuteWatermark"
-                    try conn.execute(sql: "INSERT INTO Meta(key, value) VALUES (?, ?)",
-                                     arguments: [watermarkKey, String(switchAt / tierMS - 1)])
-                    let legacyWatermarkKey = range == .d7 ? "legacy.hourMark" : "legacy.minuteMark"
-                    try conn.execute(sql: "INSERT INTO Meta(key, value) VALUES (?, ?)",
-                                     arguments: [legacyWatermarkKey, String(switchAt / tierMS - 1)])
                 }
             }
 
             let interval = interval(start, end)
             let actual = try await db.historyEnergy(in: interval, range: range)
-            let actualEnergy = actual.reduce(Int64(0)) { $0 + $1.energyNJ }
-            let actualCPU = actual.reduce(Int64(0)) { $0 + ($1.cpuNS ?? 0) }
-            XCTAssertEqual(actualEnergy, currentRows.reduce(Int64(0)) { $0 + $1.1 }, "current energy, range \(range.rawValue)")
-            XCTAssertEqual(actualCPU, currentRows.reduce(Int64(0)) { $0 + $1.2 }, "current CPU, range \(range.rawValue)")
+            XCTAssertEqual(actual, expectedEnergy(currentFixtures, range: range, version: EnergyMetric.currentVersion),
+                           "current per-bucket energy and CPU, range \(range.rawValue)")
             XCTAssertEqual(Set(actual.map(\.appID)), ["com.example.stable"], "stable color identity, range \(range.rawValue)")
             let bucketEnergy = try await db.historyHardware(in: interval, range: range).reduce(Int64(0)) { $0 + $1.totalEnergyNJ }
             XCTAssertEqual(bucketEnergy, currentRows.reduce(Int64(0)) { $0 + $1.1 }, "hardware energy, range \(range.rawValue)")
@@ -240,28 +256,43 @@ final class HistoryDatabaseQueryTests: XCTestCase {
                            expectedAtBoundary.reduce(Int64(0)) { $0 + $1.1 },
                            "range beginning at the tier switch, range \(range.rawValue)")
 
-            let widthMS = Int64(range.bucketSeconds) * 1000
             let occupied = Set(actual.map { Int64($0.date.timeIntervalSince1970 * 1000) })
-            let sleepStart = (switchAt + 30_000) / widthMS * widthMS
-            let sleepEnd = (start + 20 * tierMS) / widthMS * widthMS
-            XCTAssertFalse(occupied.contains { $0 > sleepStart && $0 < sleepEnd }, "sleep gap must remain empty, range \(range.rawValue)")
+            let expectedOccupied = Set(currentRows.map { ($0.0 / widthMS) * widthMS })
+            XCTAssertEqual(occupied, expectedOccupied, "occupied bucket starts must match current raw rows, range \(range.rawValue)")
+            let switchBucket = (switchAt / widthMS) * widthMS
+            let lateBucket = (lateTS / widthMS) * widthMS
+            let sleepBuckets = lateBucket / widthMS - switchBucket / widthMS - 1
+            XCTAssertGreaterThanOrEqual(sleepBuckets, 3, "fixture sleep gap spans at least three buckets, range \(range.rawValue)")
+            let sleepGap = Set((1...Int(sleepBuckets)).map { switchBucket + Int64($0) * widthMS })
+            XCTAssertTrue(occupied.isDisjoint(with: sleepGap), "sleep gap buckets remain absent, range \(range.rawValue)")
 
             let legacy = try await db.historyEnergy(in: interval, range: range, metricVersion: EnergyMetric.legacyVersion)
             XCTAssertEqual(legacy.reduce(Int64(0)) { $0 + $1.energyNJ }, legacyRows.reduce(Int64(0)) { $0 + $1.1 },
                            "legacy version remains isolated, range \(range.rawValue)")
             XCTAssertEqual(legacy.reduce(Int64(0)) { $0 + ($1.cpuNS ?? 0) }, legacyRows.reduce(Int64(0)) { $0 + $1.2 },
                            "legacy CPU remains isolated, range \(range.rawValue)")
+
+            if range == .d7 {
+                let nonAlignedStart = start + 30 * 60_000
+                let partialWindow = try await db.historyEnergy(in: self.interval(nonAlignedStart, end), range: range)
+                let partialFixtures = currentFixtures.filter { $0.ts >= nonAlignedStart }
+                XCTAssertEqual(partialWindow, expectedEnergy(partialFixtures, range: range, version: EnergyMetric.currentVersion),
+                               "7D query beginning off the hour includes only in-window rows")
+            }
         }
     }
 
     func testLondonDSTDaysKeepUTCBucketTotalsAndElapsedDuration() async throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "Europe/London"))
-        let cases: [(DateComponents, Double)] = [
-            (DateComponents(year: 2026, month: 3, day: 29), 23 * 3_600),
-            (DateComponents(year: 2026, month: 10, day: 25), 25 * 3_600)
+        let cases: [(DateComponents, Double, [String])] = [
+            (DateComponents(year: 2026, month: 3, day: 29), 23 * 3_600,
+             ["2026-03-29T00:00:00Z", "2026-03-29T18:00:00Z"]),
+            (DateComponents(year: 2026, month: 10, day: 25), 25 * 3_600,
+             ["2026-10-24T18:00:00Z", "2026-10-25T18:00:00Z"])
         ]
-        for (components, expectedDuration) in cases {
+        let utcFormatter = ISO8601DateFormatter()
+        for (components, expectedDuration, expectedBucketStarts) in cases {
             let db = try HistoryDatabase.makeInMemory()
             let appID = try await db.upsertApp(groupKey: "com.example.dst", bundleIdentifier: "com.example.dst",
                                                displayName: "DST App", path: "/Apps/DST.app", ts: 0)
@@ -284,6 +315,8 @@ final class HistoryDatabaseQueryTests: XCTestCase {
             XCTAssertEqual(points.reduce(Int64(0)) { $0 + ($1.cpuNS ?? 0) }, 510)
             XCTAssertEqual(points.map(\.date), points.map(\.date).sorted(), "UTC epoch buckets stay ordered through DST")
             XCTAssertEqual(points.count, 2, "empty UTC buckets remain absent on DST day")
+            XCTAssertEqual(points.map { utcFormatter.string(from: $0.date) }, expectedBucketStarts,
+                           "7D points start on the expected UTC 6-hour grid")
         }
     }
 
@@ -320,16 +353,23 @@ final class HistoryDatabaseQueryTests: XCTestCase {
             try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppUsageMinute WHERE minute < ?", arguments: [minuteCutoff]) ?? 0
         }
         XCTAssertEqual(retainedMinutes, 0, "minute cutoff removes only rows strictly before the 2-day boundary")
+        let minuteBoundaryEnergy = try await db.dbPool.read { conn in
+            try Int64.fetchOne(conn, sql: "SELECT COALESCE(SUM(energyNJ), 0) FROM AppUsageMinute WHERE minute = ?", arguments: [minuteCutoff]) ?? 0
+        }
+        XCTAssertEqual(minuteBoundaryEnergy, 7, "the minute at the inclusive retention cutoff remains")
 
         let interval = self.interval(rawCutoff, nowMS)
         let sevenDay = try await db.historyEnergy(in: interval, range: .d7)
         XCTAssertEqual(sevenDay.reduce(Int64(0)) { $0 + $1.energyNJ }, 26)
         XCTAssertEqual(sevenDay.reduce(Int64(0)) { $0 + ($1.cpuNS ?? 0) }, 260)
+        let nonAlignedSevenDay = try await db.historyEnergy(in: self.interval(rawCutoff + 30 * 60_000, nowMS), range: .d7)
+        XCTAssertEqual(nonAlignedSevenDay.reduce(Int64(0)) { $0 + $1.energyNJ }, 23,
+                       "a 7D query starting off the hour excludes earlier data")
 
         let oldHours = try await db.dbPool.read { conn in
-            try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppUsageHour WHERE hour < ?", arguments: [nowMS / 3_600_000 - 48]) ?? 0
+            try Int64.fetchOne(conn, sql: "SELECT COALESCE(SUM(energyNJ), 0) FROM AppUsageHour WHERE hour < ?", arguments: [nowMS / 3_600_000 - 48]) ?? 0
         }
-        XCTAssertGreaterThan(oldHours, 0, "hour summaries survive both raw and minute pruning")
+        XCTAssertEqual(oldHours, 10, "old hour energy survives both raw and minute pruning")
     }
 
     func testHistoryAppBreakdownUsesSameTierRoutingAsChart() async throws {
