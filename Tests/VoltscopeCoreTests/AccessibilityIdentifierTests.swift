@@ -9,7 +9,6 @@ final class AccessibilityIdentifierTests: XCTestCase {
             AccessibilityIdentifiers.menuCheckForUpdates,
             AccessibilityIdentifiers.menuQuit,
             AccessibilityIdentifiers.menuSystemProcesses,
-            AccessibilityIdentifiers.menuOpenAppInHistory,
             AccessibilityIdentifiers.historyTimeRange,
             AccessibilityIdentifiers.historyDisplayOptions,
             AccessibilityIdentifiers.historyGroupSystemProcesses,
@@ -30,7 +29,6 @@ final class AccessibilityIdentifierTests: XCTestCase {
             "menu.checkForUpdates",
             "menu.quit",
             "menu.systemProcesses",
-            "menu.openAppInHistory",
             "history.timeRange",
             "history.displayOptions",
             "history.groupSystemProcesses",
@@ -42,5 +40,37 @@ final class AccessibilityIdentifierTests: XCTestCase {
             "settings.rawRetention",
             "settings.deleteLegacyDatabase"
         ])
+    }
+
+    func testAppHistoryIdentifiersIncludeStableAppIdentity() {
+        let chrome = AccessibilityIdentifiers.menuOpenAppInHistory(appIdentity: "com.google.Chrome")
+        let safari = AccessibilityIdentifiers.menuOpenAppInHistory(appIdentity: "com.apple.Safari")
+
+        XCTAssertEqual(chrome, "menu.openAppInHistory.com.google.Chrome")
+        XCTAssertEqual(safari, "menu.openAppInHistory.com.apple.Safari")
+        XCTAssertNotEqual(chrome, safari)
+    }
+
+    func testAppHistoryLabelDescribesOpeningHistoryFromTheRow() {
+        XCTAssertEqual(AccessibilityLabels.openHistoryFromApp(name: "Safari"), "Open History from Safari")
+    }
+
+    func testBatteryPowerHintsExplainEachPowerDirection() {
+        XCTAssertEqual(
+            AccessibilityLabels.batteryPowerHint(available: true, isCharging: true, isACPlugged: true),
+            "Power flowing into the battery (V × I); excludes system power"
+        )
+        XCTAssertEqual(
+            AccessibilityLabels.batteryPowerHint(available: true, isCharging: false, isACPlugged: true),
+            "Battery current magnitude while connected to AC; not total adapter power"
+        )
+        XCTAssertEqual(
+            AccessibilityLabels.batteryPowerHint(available: true, isCharging: false, isACPlugged: false),
+            "Battery discharge rate (V × I)"
+        )
+        XCTAssertEqual(
+            AccessibilityLabels.batteryPowerHint(available: false, isCharging: false, isACPlugged: false),
+            "Power draw"
+        )
     }
 }

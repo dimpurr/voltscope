@@ -258,6 +258,26 @@ tree when their information is already expressed in text.
 
 The current menu, History, and Settings identifiers are declared in
 `AccessibilityIdentifiers` and are covered by `AccessibilityIdentifierTests`.
+Their public English values and controls are:
+
+| Identifier | Control |
+|---|---|
+| `menu.openHistory` | Menu bar Open History action |
+| `menu.settings` | Menu bar Settings action |
+| `menu.checkForUpdates` | Menu bar Check for Updates action |
+| `menu.quit` | Menu bar Quit action |
+| `menu.systemProcesses` | Menu bar System processes disclosure row |
+| `menu.openAppInHistory.<app-identity>` | Per-app menu row action; `<app-identity>` is the bundle identifier, or the process name when no bundle identifier is available |
+| `history.timeRange` | History time-range picker |
+| `history.displayOptions` | History Display options menu |
+| `history.groupSystemProcesses` | Group system processes menu item |
+| `history.exportCSV` | Export as CSV action |
+| `history.clearAppSelection` | Clear selected app action |
+| `history.systemProcesses` | System processes row in the History app breakdown |
+| `settings.launchAtLogin` | Launch at login toggle |
+| `settings.openLoginItems` | Open Login Items action |
+| `settings.rawRetention` | Raw detail retention period picker |
+| `settings.deleteLegacyDatabase` | Delete old database action |
 
 ### Chart hover behavior (v0.5.2)
 

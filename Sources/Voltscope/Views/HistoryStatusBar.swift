@@ -72,10 +72,14 @@ struct HistoryStatusBar: View {
                 .accessibilityHidden(true)
             Text(drainText)
                 .font(.callout.monospacedDigit())
-                .help(drainHelpText)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Battery power: \(drainAccessibilityValue)")
+        .accessibilityHint(AccessibilityLabels.batteryPowerHint(
+            available: battery != nil,
+            isCharging: battery?.isCharging ?? false,
+            isACPlugged: battery?.isACPlugged ?? false
+        ))
     }
 
     private var drainIconColor: Color {
@@ -86,13 +90,6 @@ struct HistoryStatusBar: View {
     private var drainText: String {
         guard let watts = battery?.instantaneousWatts else { return "—" }
         return String(format: "%.1f W", watts)
-    }
-
-    private var drainHelpText: String {
-        guard let b = battery else { return "Power draw" }
-        if b.isCharging { return "Power flowing into the battery (V × I); excludes system power" }
-        if b.isACPlugged { return "Battery current magnitude while connected to AC; not total adapter power" }
-        return "Battery discharge rate (V × I)"
     }
 
     private var chargeIcon: String {

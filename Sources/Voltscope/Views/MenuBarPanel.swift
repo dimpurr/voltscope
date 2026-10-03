@@ -237,8 +237,8 @@ struct MenuBarPanel: View {
             }
             .buttonStyle(.borderless)
             .help("Open in History window")
-            .accessibilityLabel("Open \(row.processName) in History")
-            .accessibilityIdentifier(AccessibilityIdentifiers.menuOpenAppInHistory)
+            .accessibilityLabel(AccessibilityLabels.openHistoryFromApp(name: row.processName))
+            .accessibilityIdentifier(AccessibilityIdentifiers.menuOpenAppInHistory(appIdentity: row.id))
         }
         .help(rowTooltip(row))
     }
