@@ -3,6 +3,9 @@
 ## Unreleased
 
 - Reduce per-window history flush work by resolving each distinct app group once.
+- Group bundle-less, version-named CLI processes by their executable's
+  meaningful parent directory. History queries also combine matching existing
+  rows within each bucket without rewriting stored history.
 
 ## 0.10.0 — 2026-10-03
 

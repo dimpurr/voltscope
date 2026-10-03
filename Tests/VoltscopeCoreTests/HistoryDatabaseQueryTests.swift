@@ -146,6 +146,60 @@ final class HistoryDatabaseQueryTests: XCTestCase {
         XCTAssertGreaterThan(actual.reduce(Int64(0)) { $0 + $1.totalEnergyNJ }, 0)
     }
 
+    func testVersionedCLIProcessesSumOnceWithinOneWindow() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let start = Int64(Date().timeIntervalSince1970 * 1000) / 30_000 * 30_000
+        let versions = [
+            ("2.1.286", "/Users/example/.local/share/claude/versions/2.1.286", Int32(286)),
+            ("2.1.287", "/Users/example/.local/share/claude/versions/2.1.287", Int32(287))
+        ]
+        for tick in 0..<3 {
+            let apps = versions.map { version, path, pid in
+                let identity = AppIdentity.resolve(bundleIdentifier: nil, processName: version, path: path)
+                return SampledApp(groupKey: identity.groupKey, displayName: identity.displayName, path: path,
+                                  pid: pid, energyNJ: Int64((tick + 1) * (pid == 286 ? 100 : 200)), cpuNs: 10)
+            }
+            try await db.writeTick(timestamp: start + Int64(tick * 5_000), apps: apps, buckets: [],
+                                   coverage: SampleCoverage(visible: 2, unreadable: 0))
+        }
+        try await db.flushPendingWindow()
+
+        let rows = try await db.historyEnergy(in: interval(start, start + 30_000), range: .live)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].appID, "cli:claude")
+        XCTAssertEqual(rows[0].name, "Claude Code")
+        XCTAssertEqual(rows[0].energyNJ, 1_800)
+        let storage = try await db.dbPool.read { conn in
+            (try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM App")) ?? 0
+        }
+        XCTAssertEqual(storage, 1)
+    }
+
+    func testLegacyVersionedAppRowsMergeAtQueryTime() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let first = try await db.upsertApp(groupKey: "2.1.286", bundleIdentifier: nil, displayName: "2.1.286",
+                                           path: "/Users/example/.local/share/claude/versions/2.1.286", ts: 0)
+        let second = try await db.upsertApp(groupKey: "2.1.287", bundleIdentifier: nil, displayName: "2.1.287",
+                                            path: "/Users/example/.local/share/claude/versions/2.1.287", ts: 0)
+        try await db.dbPool.write { conn in
+            for (appID, pid, energy) in [(first, Int32(286), Int64(125)), (second, Int32(287), Int64(275))] {
+                try AppSampleRaw(ts: 1_000, appId: appID, pid: pid, parentPid: nil,
+                                 metricVersion: EnergyMetric.currentVersion, energyNJ: energy, cpuNs: energy * 2,
+                                 wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0).insert(conn)
+            }
+        }
+
+        let rows = try await db.historyEnergy(in: interval(0, 30_000), range: .live)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].appID, "cli:claude")
+        XCTAssertEqual(rows[0].energyNJ, 400)
+        XCTAssertEqual(rows[0].cpuNS, 800)
+        let apps = try await db.historyAppBreakdown(in: interval(0, 30_000), range: .live)
+        XCTAssertEqual(apps.count, 1)
+        XCTAssertEqual(apps[0].processName, "Claude Code")
+        XCTAssertEqual(apps[0].totalEnergyNJ, 400)
+    }
+
     func testRawCSVIntervalClipsToConfiguredRetention() async throws {
         let db = try HistoryDatabase.makeInMemory()
         try await db.setRawRetentionDays(2)

@@ -339,7 +339,10 @@ This section supersedes all earlier History layout, chart, removal and legend ru
 
 - Compact battery history plot (80 pt), fixed 0–100% scale; a larger app CPU energy plot (200 pt); both share time bounds and plot insets.
 - CPU energy uses real vertical stacks: bar height is recorded energy, colors indicate contributions. Four leading identities for the full window, System and Other apps preserve all recorded contributions. No fabricated whole-battery attribution or 100% normalization.
-- Stable app colors and identity by bundle ID where available; no heuristic merging of unrelated helper names.
+- Stable app colors follow bundle identity, or the conservative versioned-CLI
+  identity rule in [HLD](HLD.md#app-identity-for-versioned-cli-executables-current)
+  when no bundle ID is available. Matching CLI processes appear as user apps;
+  other bundle-less process names stay separate and system-classified.
 - The existing top range picker (see [Range selector](#range-selector)) is the only time filter. Both charts, the bottom Energy breakdown / Apps columns, and CSV export use the selected range. Hover reads a bucket; selecting an app or legend item only dims other series and never changes the range.
 - Battery charging uses a green status band; sleep uses a separate muted band. Missing battery observations break the trace. No emoji event rules through the energy plot.
 - Ranges use UTC-aligned buckets sized per the [generated range table](#range-selector). 6H uses hourly axis labels; 7D deliberately shows four bars per day instead of one oversized daily bar. Edge buckets are partial and identified as such. Energy is shown in J for this CPU-only release.

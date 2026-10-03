@@ -94,7 +94,8 @@ for new samples.
 ### Tiered history tables (current)
 
 - `App` and `Bucket` hold stable identities. App rows group by bundle identifier
-  when available and process name otherwise.
+  when available and process name otherwise, with the bundle-less versioned CLI
+  rule below.
 - `AppSampleRaw` and `BucketSampleRaw` keep UTC-aligned 30-second windows for
   the configured raw retention period. Sampling remains every five seconds;
   the in-memory writer sums each process/PID and hardware bucket before writing.
@@ -112,6 +113,35 @@ converts `ri_user_time + ri_system_time` with the machine Mach timebase. Importe
 rows keep version 0 and their earlier energy values. Queries select one version
 at a time. On Intel, rows with CPU time and zero energy are retained to support
 CPU-time ranking; the interface reports energy as unavailable.
+
+### App identity for versioned CLI executables (current)
+
+Bundle IDs remain authoritative. For a process without a bundle ID, infer a
+stable CLI identity only when both the process name and executable filename
+match entirely numeric components separated by dots, with at least one dot
+(for example, `2.1.287`). The stored canonical display name is also accepted
+when re-reading rows written by this rule. Starting at its parent, skip generic
+packaging directories (`versions`, `version`, `bin`, `sbin`, `lib`, `libexec`,
+`Contents`, `MacOS`, and `current`) and use the nearest remaining directory
+name as a lowercase identity slug. The slug is the `cli:<slug>` App `groupKey`;
+`claude` displays as `Claude Code`, and other slugs display as title-cased
+directory names.
+
+For example, `~/.local/share/claude/versions/2.1.286` and
+`~/.local/share/claude/versions/2.1.287` resolve to `cli:claude` / `Claude
+Code`. `/opt/acme-tool/bin/3.4.1` resolves to `cli:acme-tool` / `Acme Tool`.
+Names such as `claude`, `v2.1.287`, and `2.1-beta`, a missing path, or a path
+with no non-generic parent keep the existing process-name identity. This narrow
+rule avoids guessing from arbitrary executable names. Stable group keys also
+give all versions the same persisted chart color identity. A process matching
+this rule is classified as a user app; other bundle-less processes remain
+system-classified.
+
+Existing App and sample rows are not rewritten. History queries apply the same
+path rule to bundle-less version-named rows and add their energy and CPU within
+each chart bucket, so old versions can appear as one app when their stored path
+contains a meaningful parent. Rows without such paths remain separate. Raw CSV
+continues to report stored process/PID rows and is not rewritten or merged.
 
 ### Legacy database migration
 
@@ -236,6 +266,11 @@ uses raw; intermediate ranges, including the full-day view, use minute
 summaries; the week view uses permanent hour summaries. Range names and bucket
 widths are owned by [UI_SPEC.md](UI_SPEC.md). Two-day minute retention leaves
 a full day of margin for the full-day query.
+
+Before returning app chart points, query results with the same inferred CLI
+identity are combined per bucket across raw, minute, and hour tiers. The exact
+identity predicate and examples are defined in [App identity for versioned CLI
+executables](#app-identity-for-versioned-cli-executables-current).
 
 ### Storage budget (0.10.0 candidate)
 

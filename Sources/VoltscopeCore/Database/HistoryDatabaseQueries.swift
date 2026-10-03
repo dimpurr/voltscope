@@ -9,7 +9,7 @@ extension HistoryDatabase {
         public let path: String?
         public let totalEnergyNJ: Int64
         public let totalCPUNS: Int64
-        public var id: String { bundleIdentifier ?? processName }
+        public var id: String { AppIdentity.resolve(bundleIdentifier: bundleIdentifier, processName: processName, path: path).groupKey }
         public init(bundleIdentifier: String?, processName: String, path: String?, totalEnergyNJ: Int64, totalCPUNS: Int64 = 0) {
             self.bundleIdentifier = bundleIdentifier; self.processName = processName; self.path = path
             self.totalEnergyNJ = totalEnergyNJ; self.totalCPUNS = totalCPUNS
@@ -23,7 +23,7 @@ extension HistoryDatabase {
         public let totalEnergyNJ: Int64
         public let totalCPUNS: Int64
         public let isSystem: Bool
-        public var id: String { bundleIdentifier ?? processName }
+        public var id: String { AppIdentity.resolve(bundleIdentifier: bundleIdentifier, processName: processName, path: path).groupKey }
         public init(bundleIdentifier: String?, processName: String, path: String?, totalEnergyNJ: Int64,
                     totalCPUNS: Int64, isSystem: Bool) {
             self.bundleIdentifier = bundleIdentifier; self.processName = processName; self.path = path
@@ -69,13 +69,19 @@ extension HistoryDatabase {
                 WHERE r.ts >= ? AND r.metricVersion = ?
                 GROUP BY r.appId ORDER BY \(energyAvailable ? "energy" : "cpu") DESC
                 """, arguments: [start, EnergyMetric.currentVersion])
-            return rows.compactMap { row in
+            let entries = rows.compactMap { row -> AppBreakdownEntry? in
                 guard let name: String = row["processName"], let energy: Int64 = row["energy"], let cpu: Int64 = row["cpu"] else { return nil }
                 let bundle: String? = row["bundleIdentifier"]
                 let path: String? = row["path"]
-                return AppBreakdownEntry(bundleIdentifier: bundle, processName: name, path: path,
+                let identity = AppIdentity.resolve(bundleIdentifier: bundle, processName: name, path: path)
+                return AppBreakdownEntry(bundleIdentifier: bundle, processName: identity.displayName, path: path,
                     totalEnergyNJ: energy, totalCPUNS: cpu,
-                    isSystem: AppClassification.isSystem(bundleIdentifier: bundle, processName: name, path: path))
+                    isSystem: AppClassification.isSystem(bundleIdentifier: bundle, processName: identity.displayName, path: path))
+            }
+            return Self.mergeBreakdownEntries(entries).sorted {
+                let lhs = energyAvailable ? $0.totalEnergyNJ : $0.totalCPUNS
+                let rhs = energyAvailable ? $1.totalEnergyNJ : $1.totalCPUNS
+                return lhs == rhs ? $0.id < $1.id : lhs > rhs
             }
         }
     }
@@ -357,12 +363,46 @@ private extension HistoryDatabase {
                 : Self.queryArguments(start: start, end: end, width: width, metricVersion: metricVersion,
                                       watermark: try Self.watermark(db, for: range, metricVersion: metricVersion), range: range)
             let rows = try Row.fetchAll(db, sql: Self.energySQL(range: range, includeZeroEnergy: includeZeroEnergy), arguments: arguments)
-            return rows.compactMap { row in
-                guard let bucket: Int64 = row["bucketMS"], let key: String = row["groupKey"],
+            let values = rows.compactMap { row -> EnergyQueryRow? in
+                guard let bucket: Int64 = row["bucketMS"],
                       let name: String = row["displayName"], let energy: Int64 = row["energyNJ"], let cpu: Int64 = row["cpuNs"] else { return nil }
-                return EnergyQueryRow(bucketMS: bucket, groupKey: key, bundleIdentifier: row["bundleIdentifier"],
-                                      displayName: name, path: row["path"], energyNJ: energy, cpuNS: cpu)
+                let bundle: String? = row["bundleIdentifier"]
+                let path: String? = row["path"]
+                let identity = AppIdentity.resolve(bundleIdentifier: bundle, processName: name, path: path)
+                return EnergyQueryRow(bucketMS: bucket, groupKey: identity.groupKey,
+                                      bundleIdentifier: bundle, displayName: identity.displayName, path: path,
+                                      energyNJ: energy, cpuNS: cpu)
             }
+            return Self.mergeEnergyRows(values)
+        }
+    }
+
+    struct CanonicalEnergyKey: Hashable {
+        let bucketMS: Int64
+        let groupKey: String
+    }
+
+    static func mergeEnergyRows(_ rows: [EnergyQueryRow]) -> [EnergyQueryRow] {
+        let grouped = Dictionary(grouping: rows, by: { CanonicalEnergyKey(bucketMS: $0.bucketMS, groupKey: $0.groupKey) })
+        return grouped.map { key, values in
+            let first = values[0]
+            return EnergyQueryRow(bucketMS: key.bucketMS, groupKey: key.groupKey,
+                                  bundleIdentifier: first.bundleIdentifier, displayName: first.displayName,
+                                  path: first.path,
+                                  energyNJ: values.reduce(0) { $0 + $1.energyNJ },
+                                  cpuNS: values.reduce(0) { $0 + $1.cpuNS })
+        }.sorted { $0.bucketMS == $1.bucketMS ? $0.groupKey < $1.groupKey : $0.bucketMS < $1.bucketMS }
+    }
+
+    static func mergeBreakdownEntries(_ entries: [AppBreakdownEntry]) -> [AppBreakdownEntry] {
+        let grouped = Dictionary(grouping: entries, by: \.id)
+        return grouped.map { _, values in
+            let first = values[0]
+            return AppBreakdownEntry(bundleIdentifier: first.bundleIdentifier, processName: first.processName,
+                                     path: first.path,
+                                     totalEnergyNJ: values.reduce(0) { $0 + $1.totalEnergyNJ },
+                                     totalCPUNS: values.reduce(0) { $0 + $1.totalCPUNS },
+                                     isSystem: first.isSystem)
         }
     }
 

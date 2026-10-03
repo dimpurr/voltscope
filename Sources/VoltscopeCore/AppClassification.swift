@@ -44,8 +44,9 @@ public enum AppClassification {
 
     public static func isSystem(bundleIdentifier: String?, processName: String, path: String?) -> Bool {
         guard let id = bundleIdentifier else {
-            // Bundle-less processes (kernel helpers, daemons launched from /usr/libexec) are system.
-            return true
+            // Recognized versioned CLIs are user apps; other bundle-less
+            // processes (kernel helpers, /usr/libexec daemons) remain system.
+            return AppIdentity.versionedExecutableSlug(path: path ?? "") == nil
         }
         if appleUserApps.contains(id) { return false }
         return id.hasPrefix("com.apple.")
