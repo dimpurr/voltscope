@@ -69,7 +69,7 @@ extension HistoryDatabase {
         let width = Int64(range.bucketSeconds) * 1000
         guard end > start, width > 0 else { return [] }
         return try await dbPool.read { db in
-            let watermark = try Self.watermark(db, for: range)
+            let watermark = try Self.watermark(db, for: range, metricVersion: metricVersion)
             let arguments: StatementArguments = range == .live
                 ? StatementArguments([width, width, start, end, Int64(metricVersion)])
                 : Self.queryArguments(start: start, end: end, width: width, metricVersion: metricVersion, watermark: watermark, range: range)
@@ -96,7 +96,7 @@ extension HistoryDatabase {
         let width = Int64(range.bucketSeconds) * 1000
         guard end > start, width > 0 else { return MetricVersionCoverage(hasOlderData: false, bucketStarts: []) }
         let buckets = try await dbPool.read { db -> [Int64] in
-            let watermark = try Self.watermark(db, for: range)
+            let watermark = try Self.watermark(db, for: range, metricVersion: EnergyMetric.legacyVersion)
             let arguments: StatementArguments = range == .live
                 ? StatementArguments([width, width, start, end, Int64(currentVersion)])
                 : Self.coverageArguments(start: start, end: end, width: width, version: currentVersion, watermark: watermark, range: range)
@@ -175,8 +175,16 @@ private extension HistoryDatabase {
         ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: Double(timestamp) / 1000))
     }
 
-    static func watermark(_ db: Database, for range: HistoryRange) throws -> Int64? {
-        let key = range == .d7 ? "rollup.hourWatermark" : "rollup.minuteWatermark"
+    /// The tail cutoff for the finest tier in use. Legacy rows are sealed by
+    /// the importer's own marks, while the current version follows the rollup
+    /// schedule so a bucket the sampler is still filling stays on the raw tail.
+    static func watermark(_ db: Database, for range: HistoryRange, metricVersion: Int) throws -> Int64? {
+        let key: String
+        if metricVersion == EnergyMetric.legacyVersion {
+            key = range == .d7 ? "legacy.hourMark" : "legacy.minuteMark"
+        } else {
+            key = range == .d7 ? "rollup.hourWatermark" : "rollup.minuteWatermark"
+        }
         guard let raw = try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key = ?", arguments: [key]) else { return nil }
         return Int64(raw)
     }
@@ -190,7 +198,7 @@ private extension HistoryDatabase {
             let arguments: StatementArguments = range == .live
                 ? StatementArguments([width, width, start, end, Int64(metricVersion)])
                 : Self.queryArguments(start: start, end: end, width: width, metricVersion: metricVersion,
-                                      watermark: try Self.watermark(db, for: range), range: range)
+                                      watermark: try Self.watermark(db, for: range, metricVersion: metricVersion), range: range)
             let rows = try Row.fetchAll(db, sql: Self.energySQL(range: range), arguments: arguments)
             return rows.compactMap { row in
                 guard let bucket: Int64 = row["bucketMS"], let key: String = row["groupKey"],

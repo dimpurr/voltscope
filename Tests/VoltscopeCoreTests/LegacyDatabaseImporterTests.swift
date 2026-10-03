@@ -46,6 +46,58 @@ private final class ImportGate: @unchecked Sendable {
     }
 }
 
+private final class LockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    /// Returns true only for the first caller.
+    func trySet() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if value { return false }
+        value = true
+        return true
+    }
+}
+
+/// Commits positive-energy rows into a legacy WAL database from a separate
+/// connection and truncates the WAL after each commit, mimicking an old
+/// process that is still running while the import reads the file.
+private final class LegacyLateWriter: @unchecked Sendable {
+    private let lock = NSLock()
+    private let writer: DatabaseQueue
+    private let base: Int64
+    private var offset: Int64 = 0
+    private(set) var inserted = 0
+    private(set) var lastError: Error?
+
+    init(writer: DatabaseQueue, base: Int64) {
+        self.writer = writer
+        self.base = base
+    }
+
+    func commitNextHour(energyNJ: Int64) {
+        lock.lock()
+        offset += 1
+        let timestamp = base + offset * 3_600_000
+        lock.unlock()
+        do {
+            try writer.write { db in
+                var sample = EnergySample(timestamp: timestamp, pid: 900, bundleIdentifier: "com.test.late",
+                                          processName: "Late", path: nil, parentPid: nil, cpuUserNs: 1, cpuSystemNs: 1,
+                                          energyNJ: energyNJ, wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0,
+                                          year: 2023, month: 11, day: 14, hour: 12, minute: 0)
+                try sample.insert(db)
+            }
+            // A checkpoint must run outside a transaction; a concurrent reader
+            // can still block TRUNCATE, which the old process tolerates.
+            try? writer.writeWithoutTransaction { db in try db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)") }
+            lock.lock(); inserted += 1; lock.unlock()
+        } catch {
+            lock.lock(); lastError = error; lock.unlock()
+        }
+    }
+}
+
 private struct ImportTotals {
     let appEnergy: Int64
     let bucketEnergy: Int64
@@ -119,6 +171,16 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         let db = try HistoryDatabase.makeTemporaryFile()
         if let url = db.fileURL { directories.append(url.deletingLastPathComponent()) }
         return db
+    }
+
+    private func makeWALWriter(at url: URL) throws -> DatabaseQueue {
+        var configuration = Configuration()
+        configuration.busyMode = .timeout(5.0)
+        configuration.prepareDatabase { db in
+            try db.execute(sql: "PRAGMA journal_mode=WAL")
+            try db.execute(sql: "PRAGMA wal_autocheckpoint=0")
+        }
+        return try DatabaseQueue(path: url.path, configuration: configuration)
     }
 
     func testImportsAppBucketBatteryAndEventRowsWithExactEnergyAndScaledCPU() async throws {
@@ -219,21 +281,6 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         }
         XCTAssertEqual(resumedCounts.0, 6)
         XCTAssertEqual(resumedCounts.1, 6)
-    }
-
-    func testImmutableLegacyOpenLeavesWALSidecarsUntouched() async throws {
-        let dir = try directory()
-        let legacyURL = dir.appendingPathComponent("db.sqlite")
-        try makeLegacy(at: legacyURL, days: 1)
-        let walURL = URL(fileURLWithPath: legacyURL.path + "-wal")
-        let shmURL = URL(fileURLWithPath: legacyURL.path + "-shm")
-        let sentinel = Data("do-not-touch".utf8)
-        try sentinel.write(to: walURL)
-        try sentinel.write(to: shmURL)
-        let history = try makeHistory()
-        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1)).run()
-        XCTAssertEqual(try Data(contentsOf: walURL), sentinel)
-        XCTAssertEqual(try Data(contentsOf: shmURL), sentinel)
     }
 
     func testConflictingBatteryAndEventPayloadsFailVerification() async throws {
@@ -342,90 +389,113 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         XCTAssertEqual(minuteOnly.reduce(Int64(0)) { $0 + $1.energyNJ }, 3_995)
         let tiers = try await history.dbPool.read { db in
             (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0 AND ts < ?", arguments: [1_700_000_000_000 + 25 * 86_400_000]) ?? 0,
+             try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.minuteMark'"),
+             try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.hourMark'"),
              try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='rollup.minuteWatermark'"),
              try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='rollup.hourWatermark'"))
         }
         XCTAssertEqual(tiers.0, 0, "this 8–25 day interval exists only in the minute tier")
         XCTAssertNotNil(tiers.1)
         XCTAssertNotNil(tiers.2)
+        XCTAssertNil(tiers.3, "the importer must not advance the current-version minute watermark")
+        XCTAssertNil(tiers.4, "the importer must not advance the current-version hour watermark")
     }
 
-    func testWALSnapshotImportsUncheckpointedRowsWithoutChangingOriginalSidecars() async throws {
+    func testImportConvergesOnCommitsMadeDuringImportWithWALCheckpoint() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 3)
+        let walWriter = try makeWALWriter(at: legacyURL)
+        let lastFixtureTimestamp: Int64 = 1_700_000_000_000 + 2 * 86_400_000 + 12 * 3_600_000
+        let late = LegacyLateWriter(writer: walWriter, base: lastFixtureTimestamp)
+        let history = try makeHistory()
+        let fired = LockedFlag()
+        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                              timebase: LegacyTimebase(numer: 1, denom: 1),
+                                              progress: { progress in
+            guard progress.importedHours == 1, fired.trySet() else { return }
+            late.commitNextHour(energyNJ: 1_001)
+            late.commitNextHour(energyNJ: 1_002)
+            late.commitNextHour(energyNJ: 1_003)
+        })
+        try await importer.run()
+
+        let totals = try await history.dbPool.read { db -> (Int64, Int, String) in
+            let appHours = try Int64.fetchOne(db, sql: "SELECT SUM(energyNJ) FROM AppUsageHour WHERE metricVersion=0") ?? 0
+            let rawLate = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0 AND energyNJ >= 1001") ?? 0
+            let state = try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'") ?? ""
+            return (appHours, rawLate, state)
+        }
+        XCTAssertEqual(totals.2, "done")
+        XCTAssertEqual(totals.0, 615 + 3_006, "fixture energy plus every commit made during the import")
+        XCTAssertEqual(totals.1, 3, "all commits made during the import must be present")
+        XCTAssertNil(late.lastError)
+        withExtendedLifetime(walWriter) {}
+    }
+
+    func testSustainedCommitsBeyondRoundBudgetStayVerifying() async throws {
         let dir = try directory()
         let legacyURL = dir.appendingPathComponent("db.sqlite")
         try makeLegacy(at: legacyURL, days: 1)
-        var configuration = Configuration()
-        configuration.prepareDatabase { db in
-            try db.execute(sql: "PRAGMA journal_mode=WAL")
-            try db.execute(sql: "PRAGMA wal_autocheckpoint=0")
-        }
-        let writer = try DatabaseQueue(path: legacyURL.path, configuration: configuration)
-        let timestamp: Int64 = 1_700_004_000_000
-        try await writer.write { db in
-            var lateSample = EnergySample(timestamp: timestamp, pid: 77, bundleIdentifier: "com.test.wal", processName: "WAL",
-                                          path: nil, parentPid: nil, cpuUserNs: 1, cpuSystemNs: 2, energyNJ: 999,
-                                          wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0,
-                                          year: 2023, month: 11, day: 14, hour: 23, minute: 0)
-            try lateSample.insert(db)
-        }
-        let walURL = URL(fileURLWithPath: legacyURL.path + "-wal")
-        let shmURL = URL(fileURLWithPath: legacyURL.path + "-shm")
-        XCTAssertGreaterThan((try FileManager.default.attributesOfItem(atPath: walURL.path)[.size] as? NSNumber)?.intValue ?? 0, 0)
-        let originalWAL = try Data(contentsOf: walURL)
-        let originalSHM = try Data(contentsOf: shmURL)
-
+        let walWriter = try makeWALWriter(at: legacyURL)
+        let lastFixtureTimestamp: Int64 = 1_700_000_000_000 + 12 * 3_600_000
+        let late = LegacyLateWriter(writer: walWriter, base: lastFixtureTimestamp)
         let history = try makeHistory()
-        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1)).run()
-        let imported = try await history.dbPool.read { db in
-            (try Int64.fetchOne(db, sql: "SELECT SUM(energyNJ) FROM AppUsageHour WHERE metricVersion=0") ?? 0,
-             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0 AND energyNJ=999") ?? 0)
+        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                              timebase: LegacyTimebase(numer: 1, denom: 1),
+                                              progress: { _ in late.commitNextHour(energyNJ: 777) })
+        try await importer.run()
+
+        let state = try await history.dbPool.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'")
         }
-        XCTAssertEqual(imported.0, 999 + 203)
-        XCTAssertEqual(imported.1, 1)
-        XCTAssertEqual(try Data(contentsOf: walURL), originalWAL)
-        XCTAssertEqual(try Data(contentsOf: shmURL), originalSHM)
-        withExtendedLifetime(writer) {}
+        XCTAssertEqual(state, "verifying", "a database that keeps changing must not be marked done")
+        XCTAssertGreaterThan(late.inserted, 0)
+        XCTAssertNil(late.lastError)
+        let doneAt = try await history.dbPool.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.doneAt'")
+        }
+        XCTAssertNil(doneAt)
+
+        // Once the writer stops, a later run converges and completes.
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                         timebase: LegacyTimebase(numer: 1, denom: 1)).run()
+        let resumedState = try await history.dbPool.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'")
+        }
+        XCTAssertEqual(resumedState, "done")
+        withExtendedLifetime(walWriter) {}
     }
 
-    func testWatermarkHandoffRollsUpCurrentRawAndIncludesPositiveLegacyEnergyAfterAnchor() async throws {
+    func testCurrentVersionSamplesWrittenAfterImportRemainVisibleInEveryRange() async throws {
         let dir = try directory()
         let legacyURL = dir.appendingPathComponent("db.sqlite")
         try makeLegacy(at: legacyURL, days: 1)
-        let base: Int64 = 1_700_000_000_000
-        let hourStart = base + 12 * 3_600_000
-        let writer = try DatabaseQueue(path: legacyURL.path)
-        try await writer.write { db in
-            var afterAnchor = EnergySample(timestamp: hourStart + 40 * 60_000, pid: 88, bundleIdentifier: "com.test.late",
-                                           processName: "Late", path: nil, parentPid: nil, cpuUserNs: 5, cpuSystemNs: 5,
-                                           energyNJ: 701, wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0,
-                                           year: 2023, month: 11, day: 14, hour: 12, minute: 40)
-            try afterAnchor.insert(db)
-        }
+        let t0: Int64 = 1_700_000_000_000 + 12 * 3_600_000
+        let hourStart = (t0 / 3_600_000) * 3_600_000
+        let fixedNow = Date(timeIntervalSince1970: Double(t0 + 10 * 60_000) / 1000)
         let history = try makeHistory()
-        try await history.writeTick(timestamp: hourStart + 10 * 60_000,
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                         timebase: LegacyTimebase(numer: 1, denom: 1),
+                                         now: { fixedNow }).run()
+
+        // Written after the import, in the same hour and before the newest
+        // legacy minute. A shared watermark would seal these away.
+        try await history.writeTick(timestamp: hourStart + 60_000,
                                     apps: [SampledApp(groupKey: "com.current", bundleIdentifier: "com.current", displayName: "Current", pid: 1, energyNJ: 17, cpuNs: 1)],
                                     buckets: [], coverage: SampleCoverage(visible: 1, unreadable: 0))
-        try await history.writeTick(timestamp: hourStart + 20 * 60_000,
+        try await history.writeTick(timestamp: hourStart + 120_000,
                                     apps: [SampledApp(groupKey: "com.current", bundleIdentifier: "com.current", displayName: "Current", pid: 1, energyNJ: 23, cpuNs: 1)],
                                     buckets: [], coverage: SampleCoverage(visible: 1, unreadable: 0))
-        let fixedNow = Date(timeIntervalSince1970: Double(hourStart + 30 * 60_000) / 1000)
-        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL, timebase: LegacyTimebase(numer: 1, denom: 1), now: { fixedNow }).run()
 
         let interval = DateInterval(start: Date(timeIntervalSince1970: Double(hourStart) / 1000),
                                     end: Date(timeIntervalSince1970: Double(hourStart + 3_600_000) / 1000))
         for range in [HistoryRange.h1, .h6, .h24, .d7] {
             let current = try await history.historyEnergy(in: interval, range: range, metricVersion: EnergyMetric.currentVersion)
+            XCTAssertEqual(current.reduce(Int64(0)) { $0 + $1.energyNJ }, 40, "current-version samples written after import for \(range.rawValue)")
             let legacy = try await history.historyEnergy(in: interval, range: range, metricVersion: EnergyMetric.legacyVersion)
-            XCTAssertEqual(current.reduce(Int64(0)) { $0 + $1.energyNJ }, 40, "current-version hand-off total for \(range.rawValue)")
-            XCTAssertEqual(legacy.reduce(Int64(0)) { $0 + $1.energyNJ }, 203 + 701, "legacy post-anchor total for \(range.rawValue)")
+            XCTAssertEqual(legacy.reduce(Int64(0)) { $0 + $1.energyNJ }, 203, "legacy total stays single-counted for \(range.rawValue)")
         }
-        let watermarks = try await history.dbPool.read { db in
-            (try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='rollup.minuteWatermark'"),
-             try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='rollup.hourWatermark'"))
-        }
-        XCTAssertEqual(watermarks.0, String((hourStart + 40 * 60_000) / 60_000))
-        XCTAssertEqual(watermarks.1, String(hourStart / 3_600_000))
-        withExtendedLifetime(writer) {}
     }
 
     func testCancelledWaiterLeavesRunLockQueueAndNeverStartsImport() async throws {
