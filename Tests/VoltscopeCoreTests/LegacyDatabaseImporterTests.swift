@@ -75,6 +75,73 @@ private final class ImportTestClock: @unchecked Sendable {
     }
 }
 
+private final class MaintenanceDuringBatteryCopy: @unchecked Sendable {
+    private let history: HistoryDatabase
+    private let clock: ImportTestClock
+    private let lock = NSLock()
+    private var nowCallCount = 0
+    private var didScheduleMaintenance = false
+    private var maintenanceError: Error?
+    private let maintenanceFinished = DispatchGroup()
+
+    init(history: HistoryDatabase, clock: ImportTestClock) {
+        self.history = history
+        self.clock = clock
+    }
+
+    func batteryCopyProgress(_ copied: Int) {
+        lock.lock()
+        let shouldStart = copied == 1 && !didScheduleMaintenance
+        if shouldStart { didScheduleMaintenance = true }
+        lock.unlock()
+        guard shouldStart else { return }
+
+        clock.advance(by: 3 * 60 * 60)
+        maintenanceFinished.enter()
+        Task.detached { [history, clock] in
+            do {
+                try await history.runMaintenance(now: clock.now())
+            } catch {
+                self.recordMaintenanceError(error)
+            }
+            self.maintenanceFinished.leave()
+        }
+    }
+
+    private func recordMaintenanceError(_ error: Error) {
+        lock.lock()
+        maintenanceError = error
+        lock.unlock()
+    }
+
+    func nowAfterBatteryCopy() -> Date {
+        lock.lock()
+        nowCallCount += 1
+        let waitForMaintenance = nowCallCount == 3
+        lock.unlock()
+        if waitForMaintenance { maintenanceFinished.wait() }
+        return clock.now()
+    }
+
+    func waitForMaintenance() {
+        maintenanceFinished.wait()
+    }
+
+    func assertVerificationResampled(file: StaticString = #filePath, line: UInt = #line) {
+        lock.lock()
+        let resampled = nowCallCount >= 3
+        lock.unlock()
+        XCTAssertTrue(resampled, "verification must resample the clock after battery and event copying", file: file, line: line)
+    }
+
+    func assertMaintenanceSucceeded(file: StaticString = #filePath, line: UInt = #line) {
+        lock.lock()
+        let error = maintenanceError
+        lock.unlock()
+        XCTAssertNil(error, "maintenance failed: \(String(describing: error))", file: file, line: line)
+    }
+}
+
 /// Commits positive-energy rows into a legacy WAL database from a separate
 /// connection and truncates the WAL after each commit, mimicking an old
 /// process that is still running while the import reads the file.
@@ -924,6 +991,32 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         }
         XCTAssertEqual(result.0, "done")
         XCTAssertNil(result.1)
+    }
+
+    func testMaintenanceDuringBatteryCopyAdvancesVerificationCutoff() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 9)
+        let history = try makeHistory()
+        let anchorMilliseconds: Int64 = 1_700_000_000_000 + 8 * 86_400_000 + 12 * 3_600_000
+        let clock = ImportTestClock(Date(timeIntervalSince1970: Double(anchorMilliseconds) / 1000))
+        let maintenance = MaintenanceDuringBatteryCopy(history: history, clock: clock)
+        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                              timebase: LegacyTimebase(numer: 1, denom: 1),
+                                              now: { maintenance.nowAfterBatteryCopy() }, rawRetentionDays: 7,
+                                              batteryCopyProgress: maintenance.batteryCopyProgress)
+
+        try await importer.start().value
+
+        maintenance.waitForMaintenance()
+        maintenance.assertMaintenanceSucceeded()
+        maintenance.assertVerificationResampled()
+        let result = try await history.dbPool.read { db in
+            (try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'") ?? "",
+             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0") ?? 0)
+        }
+        XCTAssertEqual(result.0, "done")
+        XCTAssertEqual(result.1, 14, "verification should use the retention cutoff after maintenance advanced the clock")
     }
 
     func testMissingRawRowStillFailsVerificationInsideCurrentRetentionWindow() async throws {

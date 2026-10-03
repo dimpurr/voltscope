@@ -291,12 +291,16 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
             try await history.dbPool.write { db in
                 try Self.copyBatteryAndEvents(source: source, db: db, upperBound: snapshotUpper, progress: self.batteryCopyProgress)
             }
+            let verificationRawCutoff = max(
+                anchoredRawCutoff,
+                Int64(now().timeIntervalSince1970 * 1000) - Int64(rawRetentionDays) * 86_400_000
+            )
             let oldTotals = try Self.sourceRead(source) { src in
-                try Self.readVerificationTotals(src, rawCutoff: rawCutoff, upperBound: snapshotUpper)
+                try Self.readVerificationTotals(src, rawCutoff: verificationRawCutoff, upperBound: snapshotUpper)
             }
             do {
                 try await history.dbPool.read { dst in
-                    try Self.verify(oldTotals, rawCutoff: rawCutoff, upperBound: snapshotUpper, dst)
+                    try Self.verify(oldTotals, rawCutoff: verificationRawCutoff, upperBound: snapshotUpper, dst)
                 }
             } catch is CancellationError {
                 throw CancellationError()
