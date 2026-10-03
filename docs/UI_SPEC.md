@@ -343,6 +343,7 @@ This section supersedes all earlier History layout, chart, removal and legend ru
 - The existing top range picker (see [Range selector](#range-selector)) is the only time filter. Both charts, the bottom Energy breakdown / Apps columns, and CSV export use the selected range. Hover reads a bucket; selecting an app or legend item only dims other series and never changes the range.
 - Battery charging uses a green status band; sleep uses a separate muted band. Missing battery observations break the trace. No emoji event rules through the energy plot.
 - Ranges use UTC-aligned buckets sized per the [generated range table](#range-selector). 6H uses hourly axis labels; 7D deliberately shows four bars per day instead of one oversized daily bar. Edge buckets are partial and identified as such. Energy is shown in J for this CPU-only release.
+- CSV exports one row per process and PID per UTC-aligned 30-second window. The row timestamp is the window start, and its CPU, energy, wakeup, and disk counters sum the underlying five-second samples. Live charts read this same raw window tier; 1H, 6H, and 24H use minute summaries retained for two days, and 7D uses permanent hourly summaries.
 - The original v0.6.2 full-width chart plus equal bottom columns are preserved. Hardware measurements remain in the left Energy breakdown column and are independent of App CPU totals.
 - History is a normal Dock-visible document while its window is open. Closing
   the window returns Voltscope to accessory mode; it does not terminate the

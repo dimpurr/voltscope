@@ -31,6 +31,15 @@ final class VoltscopeAppDelegate: NSObject, NSApplicationDelegate {
         welcomeController.restoreAfterExternalSettings()
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let appState else { return .terminateNow }
+        Task { @MainActor in
+            await appState.stopSamplingForTermination()
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
     private func presentWelcomeIfNeeded() {
         guard let appState else { return }
         appState.refreshLoginItemStatus()

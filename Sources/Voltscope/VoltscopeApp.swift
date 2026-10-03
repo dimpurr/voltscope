@@ -260,6 +260,13 @@ final class AppState: ObservableObject {
         }
     }
 
+    func stopSamplingForTermination() async {
+        refreshTask?.cancel()
+        refreshTask = nil
+        if let coordinator { await coordinator.stop() }
+        coordinator = nil
+    }
+
     func refreshNow() async {
         guard let db = database else { return }
         do {

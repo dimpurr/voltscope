@@ -111,6 +111,26 @@ private struct LegacyBucketRow: Sendable {
     let energyNJ: Int64
 }
 
+private struct LegacyRawAppKey: Hashable {
+    let window: Int64
+    let appID: Int64
+    let pid: Int32
+}
+
+private struct LegacyRawAppValue {
+    let parentPID: Int32?
+    var energy: Int64
+    var cpu: Int64
+    var wakeups: Int64
+    var diskRead: Int64
+    var diskWrite: Int64
+}
+
+private struct LegacyRawBucketKey: Hashable {
+    let window: Int64
+    let name: String
+}
+
 /// Imports the old database without ever opening it for writing.
 public final class LegacyDatabaseImporter: @unchecked Sendable {
     public let history: HistoryDatabase
@@ -240,10 +260,10 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
                 anchor = min(bounds.latestTimestamp, Int64(now().timeIntervalSince1970 * 1000))
                 try await setMeta("legacy.windowAnchor", value: String(anchor!))
             }
-            let minuteCutoff = anchor! - 30 * 86_400_000
-            let anchoredRawCutoff = anchor! - Int64(rawRetentionDays) * 86_400_000
-            let maintenanceRawCutoff = Int64(now().timeIntervalSince1970 * 1000)
-                - Int64(rawRetentionDays) * 86_400_000
+            let minuteCutoff = (anchor! - 2 * 86_400_000) / 60_000 * 60_000
+            let anchoredRawCutoff = Self.windowStart(anchor! - Int64(rawRetentionDays) * 86_400_000)
+            let maintenanceRawCutoff = Self.windowStart(Int64(now().timeIntervalSince1970 * 1000)
+                - Int64(rawRetentionDays) * 86_400_000)
             let rawCutoff = max(anchoredRawCutoff, maintenanceRawCutoff)
             // Every source read for this pass is bounded by the snapshot so
             // the destination can be verified against exactly what was read.
@@ -291,10 +311,8 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
             try await history.dbPool.write { db in
                 try Self.copyBatteryAndEvents(source: source, db: db, upperBound: snapshotUpper, progress: self.batteryCopyProgress)
             }
-            let verificationRawCutoff = max(
-                anchoredRawCutoff,
-                Int64(now().timeIntervalSince1970 * 1000) - Int64(rawRetentionDays) * 86_400_000
-            )
+            let verificationRawCutoff = max(anchoredRawCutoff, Self.windowStart(
+                Int64(now().timeIntervalSince1970 * 1000) - Int64(rawRetentionDays) * 86_400_000))
             let oldTotals = try Self.sourceRead(source) { src in
                 try Self.readVerificationTotals(src, rawCutoff: verificationRawCutoff, upperBound: snapshotUpper)
             }
@@ -350,6 +368,8 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         }
     }
 
+    private static func windowStart(_ timestamp: Int64) -> Int64 { timestamp / 30_000 * 30_000 }
+
     private static func readLatestTimestamp(_ source: DatabaseQueue) throws -> Int64? {
         try sourceRead(source) { db in try latestTimestamp(db) }
     }
@@ -377,6 +397,7 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         var appMinutes: [String: (Int64, Int64, Int64, Int64, Int64, Int64, Int64)] = [:]
         var appHours: [String: (Int64, Int64, Int64, Int64, Int64, Int64, Int64)] = [:]
         var appIds: [String: Int64] = [:]
+        var rawApps: [LegacyRawAppKey: LegacyRawAppValue] = [:]
         let appRows = try Row.fetchCursor(source, sql: """
             SELECT timestamp, pid, bundleIdentifier, processName, path, parentPid,
                    cpuUserNs, cpuSystemNs, energyNJ, wakeups, diskReadBytes, diskWriteBytes
@@ -413,11 +434,23 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
             }
             try Self.accumulate(&appHours, key: key, values: (energy, cpuNs, wakeups, diskRead, diskWrite))
             if timestamp >= rawCutoff {
-                try db.execute(sql: """
-                    INSERT INTO AppSampleRaw(ts, appId, pid, parentPid, metricVersion, energyNJ, cpuNs, wakeups, diskReadBytes, diskWriteBytes)
-                    VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
-                    """, arguments: [timestamp, appId, row.pid, row.parentPid, energy, cpuNs, wakeups, diskRead, diskWrite])
+                let rawKey = LegacyRawAppKey(window: timestamp / 30_000 * 30_000, appID: appId, pid: row.pid)
+                if var value = rawApps[rawKey] {
+                    value.energy += energy; value.cpu += cpuNs; value.wakeups += wakeups
+                    value.diskRead += diskRead; value.diskWrite += diskWrite
+                    rawApps[rawKey] = value
+                } else {
+                    rawApps[rawKey] = LegacyRawAppValue(parentPID: row.parentPid, energy: energy, cpu: cpuNs,
+                                                        wakeups: wakeups, diskRead: diskRead, diskWrite: diskWrite)
+                }
             }
+        }
+        for (key, value) in rawApps {
+            try db.execute(sql: """
+                INSERT INTO AppSampleRaw(ts, appId, pid, parentPid, metricVersion, energyNJ, cpuNs, wakeups, diskReadBytes, diskWriteBytes)
+                VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+                """, arguments: [key.window, key.appID, key.pid, value.parentPID, value.energy,
+                                 value.cpu, value.wakeups, value.diskRead, value.diskWrite])
         }
         // Use aggregated rows per hour/minute, including a deterministic app ID map.
         for (key, totals) in appHours {
@@ -441,6 +474,7 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
 
         var bucketMinutes: [String: Int64] = [:]
         var bucketHours: [String: Int64] = [:]
+        var rawBuckets: [LegacyRawBucketKey: Int64] = [:]
         let bucketRows = try Row.fetchCursor(source, sql: """
             SELECT timestamp, bucketName, energyNJ FROM SystemBuckets
             WHERE timestamp >= ? AND timestamp < ? AND timestamp < ? AND energyNJ > 0 ORDER BY timestamp, bucketName
@@ -450,13 +484,17 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
             let timestamp = row.timestamp
             let name = row.bucketName
             let energy = row.energyNJ
-            let bucketId = try upsertBucket(db, name: name)
-            try db.execute(sql: "INSERT OR IGNORE INTO BucketHour(hour, bucketId, metricVersion, energyNJ) VALUES (?, ?, 0, ?)", arguments: [hour, bucketId, energy])
+            _ = try upsertBucket(db, name: name)
             bucketHours[name, default: 0] += energy
             if timestamp >= minuteCutoff { bucketMinutes["\(timestamp / 60_000)|\(name)", default: 0] += energy }
             if timestamp >= rawCutoff {
-                try db.execute(sql: "INSERT INTO BucketSampleRaw(ts, bucketId, metricVersion, energyNJ) VALUES (?, ?, 0, ?)", arguments: [timestamp, bucketId, energy])
+                let window = timestamp / 30_000 * 30_000
+                rawBuckets[LegacyRawBucketKey(window: window, name: name), default: 0] += energy
             }
+        }
+        for (key, energy) in rawBuckets {
+            let id = try upsertBucket(db, name: key.name)
+            try db.execute(sql: "INSERT INTO BucketSampleRaw(ts, bucketId, metricVersion, energyNJ) VALUES (?, ?, 0, ?)", arguments: [key.window, id, energy])
         }
         for (name, energy) in bucketHours {
             let id = try upsertBucket(db, name: name)

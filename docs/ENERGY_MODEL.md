@@ -242,10 +242,26 @@ The original HLD planned `SystemPower` table and `SMAppService` helper for v1.0.
 ## 7. Storage and retention (current)
 
 The application writes `history.sqlite` with GRDB `DatabasePool` and WAL. Its
-incremental auto-vacuum setting is enabled before schema creation. Process and
-hardware raw rows are retained for the user-selected period (2, 7, 14, or 30
-days; default 7). Per-minute summaries are retained for 30 days. Per-hour
-summaries, battery snapshots, and power events are retained indefinitely.
+incremental auto-vacuum setting is enabled before schema creation. Sampling
+continues every 5 seconds, while the writer coalesces app/PID and hardware
+bucket deltas into UTC-aligned 30-second raw windows. A window is flushed when
+it changes, during maintenance, and at sampler shutdown; an incomplete final
+window is retained. Coverage stores the last scan's visible and unreadable
+counts for each window. Raw windows are retained for the user-selected period
+(2, 7, 14, or 30 days; default 7). Per-minute summaries are retained for 2
+days. Per-hour summaries, battery snapshots, and power events are retained
+indefinitely.
+
+QA measured about 2.23 million process rows/day on Apple silicon and 1.78
+million/day on Intel before coalescing. Six ticks per window yield estimates of
+about 372,000 and 297,000 app/PID rows/day respectively. The default seven-day
+raw tier therefore holds about 2.60 million or 2.08 million such rows. A
+100,000-row SQLite fixture using the raw schema and timestamp index measured
+54.23 bytes/row: approximately 20.2 MB/day and 141.1 MB/seven days on Apple
+silicon, or 16.1 MB/day and 112.6 MB/seven days on Intel, before minute and
+hour summaries. See the W14 storage report for the fixture method and exact
+output. Database size varies with sampled values, indexes, WAL activity, and
+page reuse. The two-day minute tier leaves a full-day margin for the 24H query.
 
 A maintenance run is scheduled on the existing five-minute checkpoint timer. It
 recomputes eligible minute and hour summaries, prunes expired raw and minute

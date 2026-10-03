@@ -2,6 +2,10 @@
 
 ## Unreleased — 0.10.0
 
+- Raw history and CSV now store one summed row per process/PID and UTC-aligned
+  30-second window while sampling continues every five seconds. Minute summaries
+  are retained for two days; hourly summaries remain permanent. Legacy imports
+  use the same raw window size and minute retention.
 - Added stable accessibility labels and identifiers for menu bar actions,
   History controls, and interactive Settings controls. Battery status values
   now have descriptive spoken labels for VoiceOver and UI automation. App-row

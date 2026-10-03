@@ -81,16 +81,17 @@ public actor SamplingCoordinator {
         }
     }
 
-    public func stop() {
-        processTask?.cancel()
-        batteryTask?.cancel()
-        bucketTask?.cancel()
-        checkpointTask?.cancel()
+    public func stop() async {
+        let tasks = [processTask, batteryTask, bucketTask, checkpointTask]
+        tasks.forEach { $0?.cancel() }
+        for task in tasks { await task?.value }
         processTask = nil
         batteryTask = nil
         bucketTask = nil
         checkpointTask = nil
         isRunning = false
+        do { try await database.flushPendingWindow() }
+        catch { logError("History window flush failed during shutdown: \(error)") }
     }
 
     public func recordEvent(_ event: PowerEvent) async {

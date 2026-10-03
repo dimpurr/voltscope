@@ -31,6 +31,7 @@ final class HistoryWriterTests: XCTestCase {
                               pid: 42, energyNJ: 900, cpuNs: 1200)],
             buckets: [SampledBucket(name: "CPU", energyNJ: 1500)],
             coverage: SampleCoverage(visible: 12, unreadable: 3))
+        try await db.flushPendingWindow()
         let interval = DateInterval(start: Date(timeIntervalSince1970: Double(ts - 30_000) / 1000),
                                     end: Date(timeIntervalSince1970: Double(ts + 1) / 1000))
         let app = try await db.historyEnergy(in: interval, range: .live)
@@ -50,9 +51,78 @@ final class HistoryWriterTests: XCTestCase {
                 SampledApp(groupKey: "cpu.slow", displayName: "Slow", pid: 1, energyNJ: 0, cpuNs: 100),
                 SampledApp(groupKey: "cpu.busy", displayName: "Busy", pid: 2, energyNJ: 0, cpuNs: 900)
             ], buckets: [], coverage: SampleCoverage(visible: 2, unreadable: 0), energyUnavailable: true)
+        try await db.flushPendingWindow()
         let rows = try await db.appBreakdown(sinceMinutes: 1, energyAvailable: false)
         XCTAssertEqual(rows.map(\.processName), ["Busy", "Slow"])
         XCTAssertTrue(rows.allSatisfy { $0.totalEnergyNJ == 0 })
+    }
+
+    func testSixTicksCoalesceAndWindowBoundaryFlushesWithoutLosingTotals() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let start = epoch(2026, 1, 2, 3, 4)
+        for tick in 0..<6 {
+            try await db.writeTick(timestamp: start + Int64(tick * 5_000),
+                apps: [SampledApp(groupKey: "window.app", displayName: "Window", pid: 55,
+                                  energyNJ: Int64(tick + 1), cpuNs: 10, wakeups: 1,
+                                  diskReadBytes: 2, diskWriteBytes: 3)],
+                buckets: [SampledBucket(name: "CPU", energyNJ: Int64(tick + 1))],
+                coverage: SampleCoverage(visible: Int64(tick + 1), unreadable: 1))
+        }
+        let secondWindow = start / 30_000 * 30_000 + 30_000
+        try await db.writeTick(timestamp: secondWindow,
+            apps: [SampledApp(groupKey: "window.app", displayName: "Window", pid: 55,
+                              energyNJ: 7, cpuNs: 11)], buckets: [],
+            coverage: SampleCoverage(visible: 9, unreadable: 0))
+        let firstWindow = try db.dbPool.read { conn in
+            return try Row.fetchOne(conn, sql: "SELECT ts, energyNJ, cpuNs, wakeups, diskReadBytes, diskWriteBytes FROM AppSampleRaw")
+        }
+        XCTAssertEqual(firstWindow?["ts"] as Int64?, start / 30_000 * 30_000)
+        XCTAssertEqual(firstWindow?["energyNJ"] as Int64?, 21)
+        XCTAssertEqual(firstWindow?["cpuNs"] as Int64?, 60)
+        XCTAssertEqual(firstWindow?["wakeups"] as Int64?, 6)
+        XCTAssertEqual(firstWindow?["diskReadBytes"] as Int64?, 12)
+        XCTAssertEqual(firstWindow?["diskWriteBytes"] as Int64?, 18)
+        let bucketEnergy = try await sum(db, sql: "SELECT SUM(energyNJ) FROM BucketSampleRaw")
+        XCTAssertEqual(bucketEnergy, 21)
+        let coverage = try await db.latestCoverage()
+        XCTAssertEqual(coverage?.visible, 6) // Last scan in the completed window.
+        try await db.flushPendingWindow()
+        let counts = try await db.dbPool.read { conn in try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppSampleRaw") ?? 0 }
+        XCTAssertEqual(counts, 2)
+    }
+
+    func testCoordinatorStopFlushesPartialWindow() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        try await db.writeTick(timestamp: epoch(2026, 1, 2, 3, 4) + 4_000,
+            apps: [SampledApp(groupKey: "quit.app", displayName: "Quit", pid: 70,
+                              energyNJ: 99, cpuNs: 101)], buckets: [],
+            coverage: SampleCoverage(visible: 1, unreadable: 0))
+        await SamplingCoordinator(database: db).stop()
+        let persisted = try await db.dbPool.read { conn in
+            try Int64.fetchOne(conn, sql: "SELECT SUM(energyNJ) FROM AppSampleRaw") ?? 0
+        }
+        XCTAssertEqual(persisted, 99)
+    }
+
+    func testMinuteRetentionKeepsFull24HourQueryComplete() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let now = Date(timeIntervalSince1970: Double(epoch(2026, 5, 2, 12)) / 1000)
+        let nowMS = Int64(now.timeIntervalSince1970 * 1000)
+        for (timestamp, energy) in [(nowMS - 3 * 86_400_000, Int64(999)), (nowMS - 23 * 3_600_000, Int64(10)), (nowMS - 1_800_000, Int64(20))] {
+            try await db.writeTick(timestamp: timestamp,
+                apps: [SampledApp(groupKey: "retained", displayName: "Retained", pid: 8,
+                                  energyNJ: energy, cpuNs: energy)], buckets: [],
+                coverage: SampleCoverage(visible: 1, unreadable: 0))
+        }
+        try await db.runMaintenance(now: now)
+        let oldMinutes = try await db.dbPool.read { conn in
+            try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppUsageMinute WHERE minute < ?",
+                             arguments: [nowMS / 60_000 - 2 * 24 * 60]) ?? 0
+        }
+        XCTAssertEqual(oldMinutes, 0)
+        let interval = DateInterval(start: now.addingTimeInterval(-24 * 3_600), end: now)
+        let rows = try await db.historyEnergy(in: interval, range: .h24)
+        XCTAssertEqual(rows.reduce(Int64(0)) { $0 + $1.energyNJ }, 30)
     }
 
     func testTickWritingRollupsAreIdempotentAcrossHourAndDayBoundaries() async throws {

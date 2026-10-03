@@ -285,19 +285,23 @@ final class LegacyDatabaseImporterTests: XCTestCase {
             let appEnergy = try Int64.fetchOne(db, sql: "SELECT SUM(energyNJ) FROM AppUsageHour WHERE metricVersion=0") ?? 0
             let bucketEnergy = try Int64.fetchOne(db, sql: "SELECT SUM(energyNJ) FROM BucketHour WHERE metricVersion=0") ?? 0
             let rawCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0") ?? 0
+            let rawWindowsAligned = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0 AND ts % 30000 != 0") ?? 0
+            let bucketRawCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM BucketSampleRaw WHERE metricVersion=0") ?? 0
             let minuteCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppUsageMinute WHERE metricVersion=0") ?? 0
             let batteryCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM BatteryStatus") ?? 0
             let eventCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM PowerEvents") ?? 0
             let cpuNs = try Int64.fetchOne(db, sql: "SELECT SUM(cpuNs) FROM AppUsageHour WHERE metricVersion=0") ?? 0
             let state = try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'") ?? ""
+            XCTAssertEqual(rawWindowsAligned, 0)
+            XCTAssertEqual(bucketRawCount, 16, "same-window CPU bucket samples are coalesced, including the boundary window")
             return ImportTotals(appEnergy: appEnergy, bucketEnergy: bucketEnergy, rawCount: rawCount,
                                 minuteCount: minuteCount, batteryCount: batteryCount, eventCount: eventCount,
                                 cpuNs: cpuNs, state: state)
         }
         XCTAssertEqual(totals.appEnergy, 7_488)
         XCTAssertEqual(totals.bucketEnergy, 17_120)
-        XCTAssertEqual(totals.rawCount, 14, "only positive-energy app rows in the raw retention window are kept")
-        XCTAssertEqual(totals.minuteCount, 60, "minute rows older than 30 days are omitted")
+        XCTAssertEqual(totals.rawCount, 16, "positive-energy app rows in retained windows are kept")
+        XCTAssertEqual(totals.minuteCount, 6, "only the final two days of minute rows are retained")
         XCTAssertEqual(totals.batteryCount, 32)
         XCTAssertEqual(totals.eventCount, 32)
         var scaledCPU: Int64 = 0
@@ -536,8 +540,8 @@ final class LegacyDatabaseImporterTests: XCTestCase {
              try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM BucketSampleRaw WHERE metricVersion=0") ?? 0,
              try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppUsageHour WHERE metricVersion=0") ?? 0)
         }
-        XCTAssertEqual(counts.0, 14)
-        XCTAssertEqual(counts.1, 21)
+        XCTAssertEqual(counts.0, 16)
+        XCTAssertEqual(counts.1, 16)
         XCTAssertEqual(counts.2, 16)
         XCTAssertEqual(overlap.maximum, 1, "only one run may be active at a time")
     }
@@ -566,7 +570,7 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         XCTAssertEqual(stateAndRows.2, 203)
     }
 
-    func testImportedMetricVersionQueriesDoNotDoubleCountAndKeepMinuteOnlyHistory() async throws {
+    func testImportedMetricVersionQueriesUseTwoDayMinutesAndPermanentHours() async throws {
         let dir = try directory()
         let legacyURL = dir.appendingPathComponent("db.sqlite")
         try makeLegacy(at: legacyURL, days: 32)
@@ -576,13 +580,14 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         for range in [HistoryRange.h1, .h6, .h24, .d7] {
             let interval = DateInterval(start: Date(timeIntervalSince1970: 1_700_691_200), end: Date(timeIntervalSince1970: 1_702_764_800))
             let rows = try await history.historyEnergy(in: interval, range: range, metricVersion: EnergyMetric.legacyVersion)
-            XCTAssertEqual(rows.reduce(Int64(0)) { $0 + $1.energyNJ }, 5_808, "legacy total should be counted once for \(range.rawValue)")
+            let expected: Int64 = range == .d7 ? 5_808 : 789
+            XCTAssertEqual(rows.reduce(Int64(0)) { $0 + $1.energyNJ }, expected, "legacy totals follow the retained tier for \(range.rawValue)")
         }
 
         let minuteOnlyInterval = DateInterval(start: Date(timeIntervalSince1970: Double(1_700_000_000_000 + 8 * 86_400_000) / 1000),
                                               end: Date(timeIntervalSince1970: Double(1_700_000_000_000 + 25 * 86_400_000) / 1000))
         let minuteOnly = try await history.historyEnergy(in: minuteOnlyInterval, range: .h1, metricVersion: EnergyMetric.legacyVersion)
-        XCTAssertEqual(minuteOnly.reduce(Int64(0)) { $0 + $1.energyNJ }, 3_995)
+        XCTAssertEqual(minuteOnly.reduce(Int64(0)) { $0 + $1.energyNJ }, 0, "minute rows older than two days are intentionally pruned")
         let tiers = try await history.dbPool.read { db in
             (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0 AND ts < ?", arguments: [1_700_000_000_000 + 25 * 86_400_000]) ?? 0,
              try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.minuteMark'"),
@@ -590,7 +595,7 @@ final class LegacyDatabaseImporterTests: XCTestCase {
              try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='rollup.minuteWatermark'"),
              try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='rollup.hourWatermark'"))
         }
-        XCTAssertEqual(tiers.0, 0, "this 8–25 day interval exists only in the minute tier")
+        XCTAssertEqual(tiers.0, 0, "the 8–25 day interval is outside the raw retention window")
         XCTAssertNotNil(tiers.1)
         XCTAssertNotNil(tiers.2)
         XCTAssertNil(tiers.3, "the importer must not advance the current-version minute watermark")
@@ -685,6 +690,7 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         try await history.writeTick(timestamp: hourStart + 120_000,
                                     apps: [SampledApp(groupKey: "com.current", bundleIdentifier: "com.current", displayName: "Current", pid: 1, energyNJ: 23, cpuNs: 1)],
                                     buckets: [], coverage: SampleCoverage(visible: 1, unreadable: 0))
+        try await history.flushPendingWindow()
 
         let interval = DateInterval(start: Date(timeIntervalSince1970: Double(hourStart) / 1000),
                                     end: Date(timeIntervalSince1970: Double(hourStart + 3_600_000) / 1000))
@@ -745,12 +751,12 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         _ = try AppDatabase(dbPool: writer)
         // The newest commit defines the window anchor. Its offset inside a
         // minute and an hour is nonzero, so the 7-day raw cutoff and the
-        // 30-day minute cutoff each fall inside a bucket instead of on its
+        // 2-day minute cutoff each fall inside a bucket instead of on its
         // edge. Each boundary bucket then has energy on both sides of the
         // cutoff, which a recompute from the finer tier alone cannot see.
         let anchor: Int64 = 1_700_000_010_000
         let rawCutoff = anchor - 7 * 86_400_000
-        let minuteCutoff = anchor - 30 * 86_400_000
+        let minuteCutoff = anchor - 2 * 86_400_000
         let timestamps = [rawCutoff - 1_000, rawCutoff + 1_000, minuteCutoff - 1_000, minuteCutoff + 1_000, anchor]
         try await writer.write { db in
             for (ts, energy) in zip(timestamps, [5, 7, 11, 13, 17]) {
@@ -767,17 +773,17 @@ final class LegacyDatabaseImporterTests: XCTestCase {
                                          now: { now }).start().value
 
         let before = try await legacyTierEnergy(history)
-        XCTAssertEqual(before.appMinutes, 42)
+        XCTAssertEqual(before.appMinutes, 41)
         XCTAssertEqual(before.appHours, 53)
-        XCTAssertEqual(before.bucketMinutes, 8)
+        XCTAssertEqual(before.bucketMinutes, 6)
         XCTAssertEqual(before.bucketHours, 10)
 
         try await history.runMaintenance(now: now)
         let after = try await legacyTierEnergy(history)
-        XCTAssertEqual(after.appMinutes, before.appMinutes, "the 7-day boundary minute must keep its imported total")
-        XCTAssertEqual(after.bucketMinutes, before.bucketMinutes, "the 7-day boundary bucket minute must keep its imported total")
-        XCTAssertEqual(after.appHours, before.appHours, "the 30-day boundary hour must keep its imported total")
-        XCTAssertEqual(after.bucketHours, before.bucketHours, "the 30-day boundary bucket hour must keep its imported total")
+        XCTAssertEqual(after.appMinutes, before.appMinutes, "the 2-day boundary minute must keep its imported total")
+        XCTAssertEqual(after.bucketMinutes, before.bucketMinutes, "the 2-day boundary bucket minute must keep its imported total")
+        XCTAssertEqual(after.appHours, before.appHours, "the hour tier must keep its imported total")
+        XCTAssertEqual(after.bucketHours, before.bucketHours, "the hour tier must keep its imported total")
         withExtendedLifetime(writer) {}
     }
 

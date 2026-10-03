@@ -49,6 +49,7 @@ final class DatabaseTests: XCTestCase {
             SampledApp(groupKey: "heavy", displayName: "Heavy", pid: 1, energyNJ: 5_000_000_000, cpuNs: 1),
             SampledApp(groupKey: "light", displayName: "Light", pid: 2, energyNJ: 1_000, cpuNs: 1)
         ], buckets: [], coverage: SampleCoverage(visible: 2, unreadable: 0))
+        try await db.flushPendingWindow()
         let top = try await db.topApps(sinceMinutes: 60, limit: 5)
         XCTAssertEqual(top.first?.processName, "Heavy")
     }
@@ -62,6 +63,7 @@ final class DatabaseTests: XCTestCase {
             SampledApp(groupKey: "com.google.Chrome", bundleIdentifier: "com.google.Chrome", displayName: "Chrome Helper", pid: 11, energyNJ: 3_000_000, cpuNs: 1),
             SampledApp(groupKey: "loginwindow", displayName: "loginwindow", pid: 12, energyNJ: 500, cpuNs: 1)
         ], buckets: [], coverage: SampleCoverage(visible: 3, unreadable: 0))
+        try await db.flushPendingWindow()
         let top = try await db.topApps(sinceMinutes: 60, limit: 5)
         // 2 distinct groups: Chrome (collapsed), loginwindow.
         XCTAssertEqual(top.count, 2)
@@ -222,6 +224,7 @@ final class ProcessSamplerTests: XCTestCase {
                        wakeups: sample.wakeups, diskReadBytes: sample.diskReadBytes,
                        diskWriteBytes: sample.diskWriteBytes)
         }, buckets: [], coverage: SampleCoverage(visible: 2, unreadable: 0), energyUnavailable: true)
+        try await db.flushPendingWindow()
 
         let raw = try await db.dbPool.read { conn in
             try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE energyNJ=0 AND cpuNs>0") ?? 0

@@ -1,6 +1,74 @@
 import Foundation
 import GRDB
 
+private struct WindowAppKey: Hashable {
+    let groupKey: String
+    let pid: Int32
+    let version: Int
+}
+
+private struct WindowAppValue {
+    var sample: SampledApp
+    let version: Int
+}
+
+private struct WindowBucketKey: Hashable {
+    let name: String
+    let version: Int
+}
+
+private struct WindowBatch {
+    let start: Int64
+    let apps: [WindowAppValue]
+    let buckets: [WindowBucketKey: Int64]
+    let coverage: SampleCoverage
+}
+
+/// Thread-safe in-memory coalescing for independently scheduled sampler calls.
+final class HistoryWindowBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var windowStart: Int64?
+    private var apps: [WindowAppKey: WindowAppValue] = [:]
+    private var buckets: [WindowBucketKey: Int64] = [:]
+    private var coverage = SampleCoverage(visible: 0, unreadable: 0)
+
+    fileprivate func append(timestamp: Int64, apps newApps: [SampledApp], buckets newBuckets: [SampledBucket],
+                coverage newCoverage: SampleCoverage?, version: Int, energyUnavailable: Bool) -> WindowBatch? {
+        lock.lock(); defer { lock.unlock() }
+        let start = timestamp / 30_000 * 30_000
+        let completed = windowStart != nil && windowStart != start ? takeLocked() : nil
+        if windowStart == nil || windowStart != start { windowStart = start }
+        for sample in newApps where sample.energyNJ > 0 || (energyUnavailable && sample.cpuNs > 0) {
+            let key = WindowAppKey(groupKey: sample.groupKey, pid: sample.pid, version: version)
+            if var old = apps[key] {
+                old.sample.energyNJ += sample.energyNJ; old.sample.cpuNs += sample.cpuNs
+                old.sample.wakeups += sample.wakeups; old.sample.diskReadBytes += sample.diskReadBytes
+                old.sample.diskWriteBytes += sample.diskWriteBytes
+                apps[key] = old
+            } else { apps[key] = WindowAppValue(sample: sample, version: version) }
+        }
+        for sample in newBuckets {
+            let key = WindowBucketKey(name: sample.name, version: version)
+            buckets[key, default: 0] += sample.energyNJ
+        }
+        if let newCoverage { coverage = newCoverage }
+        return completed
+    }
+
+    fileprivate func flush() -> WindowBatch? {
+        lock.lock(); defer { lock.unlock() }
+        return takeLocked()
+    }
+
+    private func takeLocked() -> WindowBatch? {
+        guard let start = windowStart else { return nil }
+        let batch = WindowBatch(start: start, apps: Array(apps.values), buckets: buckets, coverage: coverage)
+        windowStart = nil; apps.removeAll(); buckets.removeAll()
+        coverage = SampleCoverage(visible: 0, unreadable: 0)
+        return batch
+    }
+}
+
 /// Process identity and metadata supplied by a sampling caller.
 public struct SampledApp: Equatable, Sendable {
     public var groupKey: String
@@ -68,11 +136,9 @@ public extension HistoryDatabase {
 
     /// Writes hardware bucket deltas from the independently scheduled sampler.
     func writeBuckets(timestamp: Int64, buckets: [SampledBucket], metricVersion: Int = EnergyMetric.currentVersion) async throws {
-        try await dbPool.write { db in
-            for sample in buckets {
-                let bucketId = try upsertBucket(db, name: sample.name)
-                try BucketSampleRaw(ts: timestamp, bucketId: bucketId, metricVersion: metricVersion, energyNJ: sample.energyNJ).insert(db)
-            }
+        if let completed = windowBuffer.append(timestamp: timestamp, apps: [], buckets: buckets, coverage: nil,
+                                                version: metricVersion, energyUnavailable: false) {
+            try await persistWindow(completed)
         }
     }
 
@@ -87,39 +153,64 @@ public extension HistoryDatabase {
         metricVersion: Int = EnergyMetric.currentVersion,
         energyUnavailable: Bool = false
     ) async throws {
+        if let completed = windowBuffer.append(timestamp: timestamp, apps: apps, buckets: buckets, coverage: coverage,
+                                                version: metricVersion, energyUnavailable: energyUnavailable) {
+            try await persistWindow(completed)
+        }
+    }
+
+    /// Persists the last partial window. Called by maintenance and sampler shutdown.
+    func flushPendingWindow() async throws {
+        if let pending = windowBuffer.flush() { try await persistWindow(pending) }
+    }
+
+    private func persistWindow(_ batch: WindowBatch) async throws {
         try await dbPool.write { db in
-            for sample in apps where sample.energyNJ > 0 || (energyUnavailable && sample.cpuNs > 0) {
+            for value in batch.apps {
+                let sample = value.sample
                 let appId = try upsertApp(
                     db,
                     groupKey: sample.groupKey,
                     bundleIdentifier: sample.bundleIdentifier,
                     displayName: sample.displayName,
                     path: sample.path,
-                    ts: timestamp
+                    ts: batch.start
                 )
-                try AppSampleRaw(
-                    ts: timestamp, appId: appId, pid: sample.pid,
-                    parentPid: sample.parentPid, metricVersion: metricVersion,
-                    energyNJ: sample.energyNJ, cpuNs: sample.cpuNs,
-                    wakeups: sample.wakeups, diskReadBytes: sample.diskReadBytes,
-                    diskWriteBytes: sample.diskWriteBytes
-                ).insert(db)
+                try db.execute(sql: """
+                    UPDATE AppSampleRaw SET energyNJ=energyNJ+?, cpuNs=cpuNs+?, wakeups=wakeups+?,
+                        diskReadBytes=diskReadBytes+?, diskWriteBytes=diskWriteBytes+?
+                    WHERE ts=? AND appId=? AND pid=? AND metricVersion=?
+                    """, arguments: [sample.energyNJ, sample.cpuNs, sample.wakeups, sample.diskReadBytes,
+                                     sample.diskWriteBytes, batch.start, appId, sample.pid, value.version])
+                if db.changesCount == 0 {
+                    try AppSampleRaw(
+                        ts: batch.start, appId: appId, pid: sample.pid,
+                        parentPid: sample.parentPid, metricVersion: value.version,
+                        energyNJ: sample.energyNJ, cpuNs: sample.cpuNs,
+                        wakeups: sample.wakeups, diskReadBytes: sample.diskReadBytes,
+                        diskWriteBytes: sample.diskWriteBytes
+                    ).insert(db)
+                }
             }
 
-            for sample in buckets {
-                let bucketId = try upsertBucket(db, name: sample.name)
-                try BucketSampleRaw(
-                    ts: timestamp, bucketId: bucketId,
-                    metricVersion: metricVersion, energyNJ: sample.energyNJ
-                ).insert(db)
+            for (key, energy) in batch.buckets {
+                let bucketId = try upsertBucket(db, name: key.name)
+                try db.execute(sql: "UPDATE BucketSampleRaw SET energyNJ=energyNJ+? WHERE ts=? AND bucketId=? AND metricVersion=?",
+                               arguments: [energy, batch.start, bucketId, key.version])
+                if db.changesCount == 0 {
+                    try BucketSampleRaw(ts: batch.start, bucketId: bucketId,
+                                        metricVersion: key.version, energyNJ: energy).insert(db)
+                }
             }
-            try Coverage(ts: timestamp, visible: coverage.visible, unreadable: coverage.unreadable).insert(db)
+            try Coverage(ts: batch.start, visible: batch.coverage.visible, unreadable: batch.coverage.unreadable)
+                .insert(db, onConflict: .replace)
         }
     }
 
     /// Runs each maintenance phase in its own transaction. The injected date
     /// keeps cutoff behavior deterministic in tests.
     func runMaintenance(now: Date = Date()) async throws {
+        try await flushPendingWindow()
         try await rollupMinutes(now: now)
         try await rollupHours(now: now)
         try await pruneHistory(now: now)
@@ -129,6 +220,7 @@ public extension HistoryDatabase {
     /// Recomputes eligible minute rows from raw samples and advances the
     /// committed minute watermark in the same transaction.
     func rollupMinutes(now: Date = Date()) async throws {
+        try await flushPendingWindow()
         let currentMinute = Int64(now.timeIntervalSince1970 / 60)
         let upperBound = currentMinute - 1
         try await dbPool.write { db in
@@ -239,8 +331,8 @@ public extension HistoryDatabase {
                 db,
                 sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key = 'settings.rawRetentionDays'"
             ) ?? 7
-            let rawCutoff = nowMS - Int64(retention) * 86_400_000
-            let minuteCutoff = nowMS / 60_000 - 30 * 24 * 60
+            let rawCutoff = (nowMS - Int64(retention) * 86_400_000) / 30_000 * 30_000
+            let minuteCutoff = nowMS / 60_000 - 2 * 24 * 60
             try db.execute(sql: "DELETE FROM AppSampleRaw WHERE ts < ?", arguments: [rawCutoff])
             try db.execute(sql: "DELETE FROM BucketSampleRaw WHERE ts < ?", arguments: [rawCutoff])
             try db.execute(sql: "DELETE FROM Coverage WHERE ts < ?", arguments: [rawCutoff])

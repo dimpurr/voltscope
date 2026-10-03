@@ -95,10 +95,11 @@ for new samples.
 
 - `App` and `Bucket` hold stable identities. App rows group by bundle identifier
   when available and process name otherwise.
-- `AppSampleRaw` and `BucketSampleRaw` keep timestamped detail for the configured
-  raw retention period. App rows carry `metricVersion`, `energyNJ`, `cpuNs`, IO
-  counters, PID, and parent PID. A tick also writes one `Coverage` row.
-- `AppUsageMinute` / `BucketMinute` are retained for 30 days. `AppUsageHour` /
+- `AppSampleRaw` and `BucketSampleRaw` keep UTC-aligned 30-second windows for
+  the configured raw retention period. Sampling remains every five seconds;
+  the in-memory writer sums each process/PID and hardware bucket before writing.
+  `Coverage` stores the last scan's visible/unreadable counts per window.
+- `AppUsageMinute` / `BucketMinute` are retained for 2 days. `AppUsageHour` /
   `BucketHour` and `CoverageHour` are retained indefinitely. Rollups preserve
   metric versions and replace recomputed rows idempotently.
 - `BatteryStatus` and `PowerEvents` retain their legacy column shapes and are
@@ -166,9 +167,10 @@ Populated only when helper is installed. Contains powermetrics-derived joule rat
    nanoseconds, and calculate `ri_energy_nj` deltas. First observations establish
    baselines; rows without energy are retained only when CPU energy is
    unavailable and CPU time moved.
-3. In one transaction, write process rows and a `Coverage` row to
-   `history.sqlite`. Hardware bucket deltas are written to the same database by
-   the bucket sampler.
+3. Accumulate process and hardware deltas in memory and write one row per
+   `(30-second UTC window, app, PID)` or `(window, bucket)` to `history.sqlite`.
+   Flush on window change, maintenance, or shutdown; `Coverage` records the
+   last scan in each window. A partial final window is persisted as-is.
 4. The existing five-minute checkpoint timer runs the maintenance phases:
    minute rollup, hour rollup, retention pruning, and bounded incremental vacuum.
    Each rollup is idempotent and advances its watermark with the transaction.
@@ -227,7 +229,24 @@ History queries route to raw samples, minute summaries, or hour summaries based
 on the selected window. The not-yet-rolled-up tail is aggregated from raw rows.
 Every app and hardware query filters one metric version; older-version buckets
 are queried separately for the visual method marker. CSV reads the raw tier and
-exports the same selectable window as the interface.
+exports the same selectable window as the interface. The shortest chart range
+uses raw; intermediate ranges, including the full-day view, use minute
+summaries; the week view uses permanent hour summaries. Range names and bucket
+widths are owned by [UI_SPEC.md](UI_SPEC.md). Two-day minute retention leaves
+a full day of margin for the full-day query.
+
+### Storage budget (0.10.0 candidate)
+
+QA observed about 2.23 million raw process rows/day on Apple silicon and about
+1.78 million/day on Intel at five-second writes. Six-tick coalescing reduces
+these to approximately 372,000 and 297,000 process rows/day. With the default
+seven-day raw retention, that is about 2.60 million / 2.08 million retained
+process rows before indexes and bucket, minute, and hour tiers. The W14 storage
+report measures a 54.23-byte average with the raw columns and timestamp index:
+about 20.2 MB/day and 141.1 MB for seven days on Apple silicon, and 16.1
+MB/day / 112.6 MB for seven days on Intel. Actual size varies with process
+count, values, indexes, WAL activity, and page reuse. Thirty-day raw retention
+can exceed the default budget by design.
 
 ## Permissions Model
 
@@ -273,12 +292,12 @@ Voltscope ships outside the App Store (Developer ID + notarization) because the 
 |-----------|-----------|----------------------|
 | `proc_listallpids` + `proc_pid_rusage × 100` | Every 5s | ~3 ms CPU |
 | `IOPMPowerSource` snapshot | Every 30s | <1 ms |
-| GRDB write of ~30 rows | Every 5s | ~2 ms |
+| GRDB write of window aggregates | On window close or maintenance | ~2 ms |
 | SwiftUI Charts repaint (visible window) | On range change | ~50 ms initial, <16 ms on tick |
 | Helper `powermetrics` subprocess | Continuous (1s interval) | ~0.3% CPU (helper process) |
 | **Aggregate Voltscope CPU** | — | **<0.5% averaged** |
 
-Storage: ~3 MB raw per day (30 processes × 17,280 samples × ~50 B/row). Compaction at 30 days collapses to hourly aggregates; 365-day footprint <200 MB.
+Storage budget: see the current 0.10.0 candidate section above.
 
 ---
 

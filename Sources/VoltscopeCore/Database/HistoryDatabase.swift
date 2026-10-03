@@ -15,6 +15,9 @@ public final class HistoryDatabase: @unchecked Sendable {
     /// Backing file URL, or `nil` for an in-memory database.
     public let fileURL: URL?
 
+    // Process and hardware samples share one pending UTC-aligned window.
+    let windowBuffer = HistoryWindowBuffer()
+
     public init(dbPool: any DatabaseWriter, fileURL: URL? = nil) throws {
         self.dbPool = dbPool
         self.fileURL = fileURL
