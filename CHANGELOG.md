@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Refresh process identity metadata when `pbi_comm` changes, and read each
+  process's current parent PID on every sampling tick.
 - Stream CSV exports through a bounded database cursor and fixed-size batches; exports can be cancelled and incomplete files are removed on failure.
 - Added VoiceOver summaries and audio graph data descriptions for History battery and App CPU charts, and spoken CPU attribution values and trends in the Apps column. Missing intervals are announced as no data, and older metric versions remain identified separately.
 - Reduce per-window history flush work by resolving each distinct app group once.

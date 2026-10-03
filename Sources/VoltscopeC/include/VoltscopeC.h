@@ -11,8 +11,8 @@
 // Returns 0 on success, -1 on failure (errno set).
 int voltscope_proc_pid_rusage_v6(int pid, struct rusage_info_v6 *info);
 
-// Returns the parent PID for the given pid via proc_pidinfo(PROC_PIDTBSDINFO).
-// Returns -1 on failure (errno set), or if the pid is not visible to us.
-int voltscope_get_parent_pid(int pid);
+// Reads parent PID and process command name via proc_pidinfo(PROC_PIDTBSDINFO).
+// Returns 0 on success, -1 on failure (errno set), or if the pid is not visible.
+int voltscope_get_process_info(int pid, int *parent_pid, char *command, size_t command_size);
 
 #endif

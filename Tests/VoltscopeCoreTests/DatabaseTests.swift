@@ -108,12 +108,12 @@ final class ProcessSamplerTests: XCTestCase {
         let firstKey = ProcessSampler.MetadataKey(pid: 42, startAbstime: 100)
         let reusedKey = ProcessSampler.MetadataKey(pid: 42, startAbstime: 200)
         let first = ProcessSampler.ProcessMetadata(
-            name: "tool-1.0", path: "/opt/tool/versions/1.0", bundleId: nil, parentPid: 7,
+            comm: "tool", name: "tool-1.0", path: "/opt/tool/versions/1.0", bundleId: nil,
             resolvedIdentity: AppIdentity.resolve(bundleIdentifier: nil, processName: "tool-1.0",
                                                   path: "/opt/tool/versions/1.0")
         )
         let reused = ProcessSampler.ProcessMetadata(
-            name: "tool-2.0", path: "/opt/tool/versions/2.0", bundleId: nil, parentPid: 9,
+            comm: "tool", name: "tool-2.0", path: "/opt/tool/versions/2.0", bundleId: nil,
             resolvedIdentity: AppIdentity.resolve(bundleIdentifier: nil, processName: "tool-2.0",
                                                   path: "/opt/tool/versions/2.0")
         )
@@ -137,40 +137,75 @@ final class ProcessSamplerTests: XCTestCase {
         XCTAssertEqual(bounded.value(for: reusedKey), reused)
     }
 
-    func testCachedMetadataPreservesEveryResolvedIdentityField() {
-        let name = "2.1.287"
-        let path = "/Users/example/.local/share/claude/versions/2.1.287"
-        let uncached = AppIdentity.resolve(bundleIdentifier: nil, processName: name, path: path)
-        let metadata = ProcessSampler.ProcessMetadata(name: name, path: path, bundleId: nil, parentPid: 11,
-                                                      resolvedIdentity: uncached)
-        let fromCache = metadata.resolvedIdentity
-        XCTAssertEqual(fromCache.groupKey, uncached.groupKey)
-        XCTAssertEqual(fromCache.displayName, uncached.displayName)
-        XCTAssertEqual(metadata.name, name)
-        XCTAssertEqual(metadata.path, path)
-        XCTAssertEqual(metadata.bundleId, nil)
-        XCTAssertEqual(metadata.parentPid, 11)
-
-        func snapshot(_ currentEnergy: UInt64, metadata: ProcessSampler.ProcessMetadata) -> ProcessSnapshot {
-            ProcessSnapshot(pid: 77, parentPid: metadata.parentPid, bundleIdentifier: metadata.bundleId,
-                            processName: metadata.name, path: metadata.path,
-                            cpuUserNs: 200, cpuSystemNs: 100, energyTotal: currentEnergy,
-                            wakeupsTotal: 4, diskReadTotal: 20, diskWriteTotal: 30,
-                            procStartAbstime: 500)
+    func testMetadataLookupRefreshesOnCommChangeAndUsesCurrentParent() {
+        typealias Cache = ProcessSampler.MetadataCache<ProcessSampler.MetadataKey, ProcessSampler.ProcessMetadata>
+        let key = ProcessSampler.MetadataKey(pid: 77, startAbstime: 500)
+        let path = "/opt/java/bin/java"
+        func resolved(comm: String, name: String) -> ProcessSampler.ProcessMetadata {
+            ProcessSampler.ProcessMetadata(
+                comm: comm, name: name, path: path, bundleId: nil,
+                resolvedIdentity: AppIdentity.resolve(bundleIdentifier: nil, processName: name, path: path)
+            )
         }
-        let prior = snapshot(10, metadata: metadata)
-        let cachedResult = ProcessSampler.deltaSample(from: prior, to: snapshot(25, metadata: metadata),
-                                                     timestamp: 1_700_000_000_000, year: 2026,
-                                                     month: 10, day: 3, hour: 20, minute: 0)
-        let uncachedMetadata = ProcessSampler.ProcessMetadata(
-            name: name, path: path, bundleId: nil, parentPid: 11,
-            resolvedIdentity: AppIdentity.resolve(bundleIdentifier: nil, processName: name, path: path)
-        )
-        let uncachedResult = ProcessSampler.deltaSample(from: snapshot(10, metadata: uncachedMetadata),
-                                                        to: snapshot(25, metadata: uncachedMetadata),
-                                                        timestamp: 1_700_000_000_000, year: 2026,
-                                                        month: 10, day: 3, hour: 20, minute: 0)
-        XCTAssertEqual(cachedResult, uncachedResult, "cached and uncached sample rows must match field for field")
+        var cache = Cache()
+
+        let initial = ProcessSampler.metadataForTick(key: key, comm: "sh", parentPid: 11, cache: &cache) {
+            resolved(comm: "sh", name: "sh")
+        }
+        let execed = ProcessSampler.metadataForTick(key: key, comm: "java", parentPid: 19, cache: &cache) {
+            resolved(comm: "java", name: "Java")
+        }
+        var shouldNotResolve = false
+        let reparented = ProcessSampler.metadataForTick(key: key, comm: "java", parentPid: 1, cache: &cache) {
+            shouldNotResolve = true
+            return resolved(comm: "java", name: "unexpected")
+        }
+
+        XCTAssertEqual(initial.process.name, "sh")
+        XCTAssertEqual(execed.process.name, "Java", "exec must invalidate prior process identity")
+        XCTAssertEqual(reparented.process.name, "Java", "same comm should keep resolved identity")
+        XCTAssertFalse(shouldNotResolve)
+        XCTAssertEqual(initial.parentPid, 11)
+        XCTAssertEqual(execed.parentPid, 19)
+        XCTAssertEqual(reparented.parentPid, 1, "parent PID must come from the current tick")
+    }
+
+    func testMetadataLookupDoesNotCacheUnavailableOrFallbackIdentity() {
+        typealias Cache = ProcessSampler.MetadataCache<ProcessSampler.MetadataKey, ProcessSampler.ProcessMetadata>
+        let path = "/opt/tool/bin/tool"
+        let cases: [(String?, String?, String?)] = [
+            ("tool", "tool", nil),
+            (nil, "tool", path),
+            ("pid 88", "pid 88", path)
+        ]
+
+        for (comm, name, resolvedPath) in cases {
+            var cache = Cache()
+            let key = ProcessSampler.MetadataKey(pid: 88, startAbstime: 900)
+            _ = ProcessSampler.metadataForTick(key: key, comm: comm, parentPid: nil, cache: &cache) {
+                ProcessSampler.ProcessMetadata(
+                    comm: comm ?? name!, name: name!, path: resolvedPath, bundleId: nil,
+                    resolvedIdentity: AppIdentity.resolve(bundleIdentifier: nil, processName: name!, path: resolvedPath)
+                )
+            }
+            XCTAssertNil(cache.value(for: key), "unreliable identity metadata must not be cached")
+        }
+
+        var cache = Cache()
+        let key = ProcessSampler.MetadataKey(pid: 88, startAbstime: 900)
+        _ = ProcessSampler.metadataForTick(key: key, comm: "tool", parentPid: nil, cache: &cache) {
+            ProcessSampler.ProcessMetadata(
+                comm: "tool", name: "tool", path: path, bundleId: nil,
+                resolvedIdentity: AppIdentity.resolve(bundleIdentifier: nil, processName: "tool", path: path)
+            )
+        }
+        _ = ProcessSampler.metadataForTick(key: key, comm: "tool-v2", parentPid: nil, cache: &cache) {
+            ProcessSampler.ProcessMetadata(
+                comm: "tool-v2", name: "pid 88", path: nil, bundleId: nil,
+                resolvedIdentity: AppIdentity.resolve(bundleIdentifier: nil, processName: "pid 88", path: nil)
+            )
+        }
+        XCTAssertNil(cache.value(for: key), "an unusable replacement must evict stale identity metadata")
     }
 
     func testFirstTickEstablishesBaselineEmits() {

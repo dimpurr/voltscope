@@ -51,11 +51,16 @@ public final class ProcessSampler: @unchecked Sendable {
     }
 
     struct ProcessMetadata: Equatable {
+        let comm: String
         let name: String
         let path: String?
         let bundleId: String?
-        let parentPid: Int32?
         let resolvedIdentity: AppIdentity.Resolved
+    }
+
+    struct TickMetadata {
+        let process: ProcessMetadata
+        let parentPid: Int32?
     }
 
     struct MetadataCache<Key: Hashable, Value> {
@@ -80,6 +85,35 @@ public final class ProcessSampler: @unchecked Sendable {
             values = values.filter { activeKeys.contains($0.key) }
             insertionOrder.removeAll { !activeKeys.contains($0) }
         }
+
+        mutating func removeValue(for key: Key) {
+            values.removeValue(forKey: key)
+            insertionOrder.removeAll { $0 == key }
+        }
+    }
+
+    static func metadataForTick(
+        key: MetadataKey,
+        comm: String?,
+        parentPid: Int32?,
+        cache: inout MetadataCache<MetadataKey, ProcessMetadata>,
+        resolve: () -> ProcessMetadata
+    ) -> TickMetadata {
+        if let comm, let cached = cache.value(for: key), cached.comm == comm {
+            return TickMetadata(process: cached, parentPid: parentPid)
+        }
+
+        cache.removeValue(for: key)
+        let metadata = resolve()
+        if comm != nil && metadata.path != nil && !isFallbackProcessName(metadata.name) {
+            cache.insert(metadata, for: key)
+        }
+        return TickMetadata(process: metadata, parentPid: parentPid)
+    }
+
+    static func isFallbackProcessName(_ name: String) -> Bool {
+        let parts = name.split(separator: " ")
+        return parts.count == 2 && parts[0] == "pid" && Int32(parts[1]) != nil
     }
 
     private var metadataCache = MetadataCache<MetadataKey, ProcessMetadata>()
@@ -293,20 +327,28 @@ public final class ProcessSampler: @unchecked Sendable {
         }
 
         let metadataKey = MetadataKey(pid: Int32(pid), startAbstime: info.ri_proc_start_abstime)
-        let metadata: ProcessMetadata
-        if let cached = metadataCache.value(for: metadataKey) {
-            metadata = cached
-        } else {
-            let ppidRaw = voltscope_get_parent_pid(pid)
-            let parentPid: Int32? = ppidRaw > 0 ? Int32(ppidRaw) : nil
+        var ppidRaw: Int32 = -1
+        var commandBuffer = [CChar](repeating: 0, count: 32)
+        let processInfoResult = commandBuffer.withUnsafeMutableBufferPointer { buffer in
+            voltscope_get_process_info(pid, &ppidRaw, buffer.baseAddress, buffer.count)
+        }
+        let parentPid = processInfoResult == 0 && ppidRaw > 0 ? ppidRaw : nil
+        let comm: String? = processInfoResult == 0
+            ? commandBuffer.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
+            : nil
+        let tickMetadata = Self.metadataForTick(
+            key: metadataKey,
+            comm: comm,
+            parentPid: parentPid,
+            cache: &metadataCache
+        ) {
             let identity = resolveIdentity(pid: pid)
             let resolvedIdentity = AppIdentity.resolve(bundleIdentifier: identity.bundleId,
                                                        processName: identity.name, path: identity.path)
-            metadata = ProcessMetadata(name: identity.name, path: identity.path,
-                                       bundleId: identity.bundleId, parentPid: parentPid,
-                                       resolvedIdentity: resolvedIdentity)
-            metadataCache.insert(metadata, for: metadataKey)
+            return ProcessMetadata(comm: comm ?? identity.name, name: identity.name, path: identity.path,
+                                   bundleId: identity.bundleId, resolvedIdentity: resolvedIdentity)
         }
+        let metadata = tickMetadata.process
 
         // ri_user_time and ri_system_time are in mach absolute time units.
         // Multiply by timebaseNumer/timebaseDenom to convert to nanoseconds.
@@ -317,7 +359,7 @@ public final class ProcessSampler: @unchecked Sendable {
 
         return ProcessSnapshot(
             pid: pid,
-            parentPid: metadata.parentPid,
+            parentPid: tickMetadata.parentPid,
             bundleIdentifier: metadata.bundleId,
             processName: metadata.name,
             path: metadata.path,
