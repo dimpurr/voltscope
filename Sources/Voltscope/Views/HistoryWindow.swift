@@ -147,7 +147,7 @@ struct HistoryWindow: View {
             async let e = db.historyEvents(in: interval)
             async let h = db.historyHardware(in: interval, range: requestedRange)
             async let v = db.metricVersionCoverage(in: interval, range: requestedRange)
-            async let a = db.appBreakdown(sinceMinutes: requestedRange.minutes, energyAvailable: appState.processEnergyAvailable)
+            async let a = db.historyAppBreakdown(in: interval, range: requestedRange)
             let result = try await (p, b, e, h, v, a)
             guard !Task.isCancelled, range == requestedRange else { return }
             let snapshot = HistorySnapshot(range: requestedRange, domain: start...end, points: result.0,

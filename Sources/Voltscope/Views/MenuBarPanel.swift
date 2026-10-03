@@ -201,7 +201,9 @@ struct MenuBarPanel: View {
                 .truncationMode(.middle)
             Spacer()
             if !appState.processEnergyAvailable { Text(String(format: "%.1fs", Double(row.totalCPUNS) / 1e9)).font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
-            IntensityDots(filled: IntensityDots.dotCount(value: appState.processEnergyAvailable ? row.totalEnergyNJ : row.totalCPUNS, max: topMax))
+            IntensityDots(filled: IntensityDots.dotCount(value: MenuBarMetricPresentation.value(
+                energyNJ: row.totalEnergyNJ, cpuNS: row.totalCPUNS,
+                energyAvailable: appState.processEnergyAvailable), max: topMax))
             Button {
                 openWindow(id: "history")
                 NSApp.activate(ignoringOtherApps: true)
@@ -256,7 +258,10 @@ struct MenuBarPanel: View {
 
             if systemExpanded {
                 VStack(alignment: .leading, spacing: 6) {
-                    let systemMax = appState.systemSummary.topItems.map(\.totalEnergyNJ).max() ?? 0
+                    let systemMax = appState.systemSummary.topItems.map {
+                        MenuBarMetricPresentation.value(energyNJ: $0.totalEnergyNJ, cpuNS: $0.totalCPUNS,
+                                                        energyAvailable: appState.processEnergyAvailable)
+                    }.max() ?? 0
                     ForEach(appState.systemSummary.topItems) { row in
                         appRow(row, topMax: systemMax)
                             .opacity(0.7)
@@ -275,8 +280,8 @@ struct MenuBarPanel: View {
 
     private var systemSummaryText: String {
         let s = appState.systemSummary
-        let j = Double(s.totalEnergyNJ) / 1_000_000_000.0
-        return String(format: "%d procs · %.2f J", s.count, j)
+        return MenuBarMetricPresentation.systemSummary(count: s.count, energyNJ: s.totalEnergyNJ,
+                                                       cpuNS: s.totalCPUNS, energyAvailable: appState.processEnergyAvailable)
     }
 
     // MARK: - Footer

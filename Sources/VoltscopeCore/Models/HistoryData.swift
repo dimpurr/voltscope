@@ -76,6 +76,17 @@ public enum HistoryMath {
     }
 }
 
+public enum MenuBarMetricPresentation {
+    public static func value(energyNJ: Int64, cpuNS: Int64, energyAvailable: Bool) -> Int64 {
+        energyAvailable ? energyNJ : cpuNS
+    }
+
+    public static func systemSummary(count: Int, energyNJ: Int64, cpuNS: Int64, energyAvailable: Bool) -> String {
+        if energyAvailable { return String(format: "%d procs · %.2f J", count, Double(energyNJ) / 1e9) }
+        return String(format: "%d procs · %.1f s CPU", count, Double(cpuNS) / 1e9)
+    }
+}
+
 /// Immutable rendering data. Build after a query or a grouping change, never on hover.
 public struct HistoryChartModel: Equatable, Sendable {
     public struct Segment: Identifiable, Equatable, Sendable {

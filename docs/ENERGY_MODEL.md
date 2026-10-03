@@ -288,8 +288,9 @@ The shipped chart remains recorded per-process CPU attribution. It does not scal
 The current process sampler reads `ri_energy_nj` from `RUSAGE_INFO_V6` for
 per-process hardware-estimated CPU energy. Earlier records using `ri_billed_energy` have metric version 0; current records have metric version 1, and queries never add the versions together. It converts `ri_user_time` and
 `ri_system_time` using the active Mach timebase before recording nanoseconds.
-The first observation establishes a baseline, and intervals with zero energy
-delta do not emit process rows. The system bucket sampler selects a summary
+The first observation establishes a baseline. Intervals with zero energy
+delta do not emit process rows when process energy is available; on Intel,
+process rows with CPU time are still recorded with zero energy. The system bucket sampler selects a summary
 channel per die when available, or CPU cluster channels when no CPU summary
 exists; CPU core channels are retained only when that die has neither a CPU
 summary nor any cluster total. GPU Energy suppresses GPU child channels on the

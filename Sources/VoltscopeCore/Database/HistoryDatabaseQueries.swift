@@ -80,6 +80,24 @@ extension HistoryDatabase {
         }
     }
 
+    /// Returns app totals from the same routed tier query used by History charts.
+    public func historyAppBreakdown(in interval: DateInterval, range: HistoryRange) async throws -> [AppBreakdownEntry] {
+        let rows = try await energyRows(in: interval, range: range, metricVersion: EnergyMetric.currentVersion,
+                                        includeZeroEnergy: true)
+        let points = rows.map { row in
+            HistoryEnergyPoint(appID: row.groupKey, name: row.displayName, bundleIdentifier: row.bundleIdentifier,
+                               path: row.path,
+                               isSystem: AppClassification.isSystem(bundleIdentifier: row.bundleIdentifier,
+                                                                    processName: row.displayName, path: row.path),
+                               date: Date(timeIntervalSince1970: Double(row.bucketMS) / 1000),
+                               energyNJ: row.energyNJ, cpuNS: row.cpuNS)
+        }
+        return HistoryMath.apps(points).map {
+            AppBreakdownEntry(bundleIdentifier: $0.bundleIdentifier, processName: $0.name, path: $0.path,
+                              totalEnergyNJ: $0.energyNJ, totalCPUNS: $0.cpuNS, isSystem: $0.isSystem)
+        }
+    }
+
     public func topApps(sinceMinutes minutes: Int, limit: Int = 5, energyAvailable: Bool = true) async throws -> [TopAppEnergy] {
         let entries = try await appBreakdown(sinceMinutes: minutes, energyAvailable: energyAvailable)
         return entries.prefix(limit).map {
@@ -267,6 +285,13 @@ extension HistoryDatabase {
             }
         }
     }
+
+    /// Clips a requested export to the raw retention window, the source tier for CSV.
+    public func rawCSVInterval(in interval: DateInterval, now: Date = Date()) async throws -> DateInterval {
+        let days = try await rawRetentionDays()
+        let earliest = now.addingTimeInterval(-Double(days) * 86_400)
+        return DateInterval(start: max(interval.start, earliest), end: interval.end)
+    }
 }
 
 private extension HistoryDatabase {
@@ -300,7 +325,8 @@ private extension HistoryDatabase {
         return Int64(raw)
     }
 
-    func energyRows(in interval: DateInterval, range: HistoryRange, metricVersion: Int) async throws -> [EnergyQueryRow] {
+    func energyRows(in interval: DateInterval, range: HistoryRange, metricVersion: Int,
+                    includeZeroEnergy: Bool = false) async throws -> [EnergyQueryRow] {
         let start = Self.epochMilliseconds(interval.start)
         let end = Self.epochMilliseconds(interval.end)
         let width = Int64(range.bucketSeconds) * 1000
@@ -310,7 +336,7 @@ private extension HistoryDatabase {
                 ? StatementArguments([width, width, start, end, Int64(metricVersion)])
                 : Self.queryArguments(start: start, end: end, width: width, metricVersion: metricVersion,
                                       watermark: try Self.watermark(db, for: range, metricVersion: metricVersion), range: range)
-            let rows = try Row.fetchAll(db, sql: Self.energySQL(range: range), arguments: arguments)
+            let rows = try Row.fetchAll(db, sql: Self.energySQL(range: range, includeZeroEnergy: includeZeroEnergy), arguments: arguments)
             return rows.compactMap { row in
                 guard let bucket: Int64 = row["bucketMS"], let key: String = row["groupKey"],
                       let name: String = row["displayName"], let energy: Int64 = row["energyNJ"], let cpu: Int64 = row["cpuNs"] else { return nil }
@@ -338,13 +364,13 @@ private extension HistoryDatabase {
                 width, width, start, end, Int64(version), cutoff, tierStart, tierEnd]
     }
 
-    static func energySQL(range: HistoryRange) -> String {
+    static func energySQL(range: HistoryRange, includeZeroEnergy: Bool = false) -> String {
         if range == .live {
             return """
                 SELECT (r.ts / ?) * ? AS bucketMS, a.groupKey, a.bundleIdentifier, a.displayName, a.path, SUM(r.energyNJ) AS energyNJ, SUM(r.cpuNs) AS cpuNs
                 FROM AppSampleRaw r JOIN App a ON a.id = r.appId
                 WHERE r.ts >= ? AND r.ts < ? AND r.metricVersion = ?
-                GROUP BY bucketMS, r.appId HAVING energyNJ > 0 ORDER BY bucketMS, a.groupKey
+                GROUP BY bucketMS, r.appId \(includeZeroEnergy ? "" : "HAVING energyNJ > 0") ORDER BY bucketMS, a.groupKey
                 """
         }
         let isHour = range == .d7
@@ -361,7 +387,7 @@ private extension HistoryDatabase {
                     AND (r.ts >= ? OR r.ts < ? OR r.ts >= ?)
             )
             SELECT t.bucketMS, a.groupKey, a.bundleIdentifier, a.displayName, a.path, SUM(t.energyNJ) AS energyNJ, SUM(t.cpuNs) AS cpuNs
-            FROM tier t JOIN App a ON a.id = t.appId GROUP BY t.bucketMS, t.appId HAVING energyNJ > 0 ORDER BY t.bucketMS, a.groupKey
+            FROM tier t JOIN App a ON a.id = t.appId GROUP BY t.bucketMS, t.appId \(includeZeroEnergy ? "" : "HAVING energyNJ > 0") ORDER BY t.bucketMS, a.groupKey
             """
     }
 

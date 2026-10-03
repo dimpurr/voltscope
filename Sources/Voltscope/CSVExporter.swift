@@ -8,9 +8,17 @@ enum CSVExporter {
     /// history for the requested window into a CSV file.
     @MainActor
     static func exportEnergyHistory(database: HistoryDatabase, interval: DateInterval) async {
+        let exportInterval: DateInterval
+        do { exportInterval = try await database.rawCSVInterval(in: interval) }
+        catch { return }
         let panel = NSSavePanel()
         panel.title = "Export Energy History as CSV"
-        panel.message = "Saves the visible time range as a comma-separated values file."
+        if exportInterval.start > interval.start {
+            let date = DateFormatter.localizedString(from: exportInterval.start, dateStyle: .medium, timeStyle: .short)
+            panel.message = "Raw samples are retained for the selected period, so this export starts at \(date)."
+        } else {
+            panel.message = "Saves the visible time range as a comma-separated values file."
+        }
         panel.prompt = "Export"
         panel.allowedContentTypes = [.commaSeparatedText]
         let defaultName = ISO8601DateFormatter().string(from: Date())
@@ -20,7 +28,7 @@ enum CSVExporter {
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
         do {
-            try await writeCSV(database: database, interval: interval, to: url)
+            try await writeCSV(database: database, interval: exportInterval, to: url)
         } catch {
             let alert = NSAlert()
             alert.messageText = "Export failed"

@@ -866,6 +866,29 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyURL.path))
     }
 
+    func testMissingLegacyTablesPersistFailureForSettingsAndRetry() async throws {
+        let history = try makeHistory()
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        _ = try DatabaseQueue(path: legacyURL.path)
+
+        let started = try await history.startLegacyImportIfNeeded(at: legacyURL)
+        let work = try XCTUnwrap(started)
+        do {
+            try await work.value
+            XCTFail("Expected import preflight to fail")
+        } catch {
+            let status = try await history.importStatus()
+            XCTAssertEqual(status.state, .failed)
+            XCTAssertTrue(status.error?.isEmpty == false)
+        }
+        let retryTask = try await history.startLegacyImportIfNeeded(at: legacyURL)
+        let retry = try XCTUnwrap(retryTask)
+        do { try await retry.value; XCTFail("Expected retry to fail") } catch {}
+        let retriedStatus = try await history.importStatus()
+        XCTAssertEqual(retriedStatus.state, .failed)
+    }
+
     func testReadOnlyPerformanceImportWhenExplicitlyConfigured() async throws {
         guard let sourcePath = ProcessInfo.processInfo.environment["VOLTSCOPE_LEGACY_BENCHMARK_SOURCE"] else {
             throw XCTSkip("Set VOLTSCOPE_LEGACY_BENCHMARK_SOURCE to run the full-database benchmark.")

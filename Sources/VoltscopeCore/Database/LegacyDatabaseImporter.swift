@@ -189,30 +189,30 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
     }
 
     private func performRun() async throws {
-        guard timebase.numer > 0, timebase.denom > 0 else { throw LegacyImportError.invalidTimebase }
-        guard FileManager.default.fileExists(atPath: legacyURL.path) else { throw CocoaError(.fileNoSuchFile) }
-
-        var configuration = Configuration()
-        configuration.readonly = true
-        configuration.busyMode = .timeout(5.0)
-        let source = try DatabaseQueue(path: legacyURL.path, configuration: configuration)
-        let schema = try Self.sourceRead(source) { db in
-            Set(try String.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE type = 'table'"))
-        }
-        guard schema.contains("EnergyHistory"), schema.contains("SystemBuckets") else {
-            throw LegacyImportError.missingLegacyTables
-        }
-        guard let initialBounds = try Self.readBounds(source) else {
-            throw LegacyImportError.emptyLegacyEnergyHistory
-        }
-        let savedState = try await meta("legacy.state")
-        if savedState == LegacyImportState.done.rawValue { return }
-        if savedState == nil || savedState == LegacyImportState.none.rawValue || savedState == LegacyImportState.failed.rawValue {
-            try await setMeta("legacy.state", value: LegacyImportState.pending.rawValue)
-        }
-        let savedAnchor = try await meta("legacy.windowAnchor").flatMap(Int64.init)
-
         do {
+            guard timebase.numer > 0, timebase.denom > 0 else { throw LegacyImportError.invalidTimebase }
+            guard FileManager.default.fileExists(atPath: legacyURL.path) else { throw CocoaError(.fileNoSuchFile) }
+
+            var configuration = Configuration()
+            configuration.readonly = true
+            configuration.busyMode = .timeout(5.0)
+            let source = try DatabaseQueue(path: legacyURL.path, configuration: configuration)
+            let schema = try Self.sourceRead(source) { db in
+                Set(try String.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE type = 'table'"))
+            }
+            guard schema.contains("EnergyHistory"), schema.contains("SystemBuckets") else {
+                throw LegacyImportError.missingLegacyTables
+            }
+            guard let initialBounds = try Self.readBounds(source) else {
+                throw LegacyImportError.emptyLegacyEnergyHistory
+            }
+            let savedState = try await meta("legacy.state")
+            if savedState == LegacyImportState.done.rawValue { return }
+            if savedState == nil || savedState == LegacyImportState.none.rawValue || savedState == LegacyImportState.failed.rawValue {
+                try await setMeta("legacy.state", value: LegacyImportState.pending.rawValue)
+            }
+            let savedAnchor = try await meta("legacy.windowAnchor").flatMap(Int64.init)
+
             try await importUntilConverged(source: source, initialBounds: initialBounds, savedAnchor: savedAnchor)
         } catch is CancellationError {
             throw CancellationError()

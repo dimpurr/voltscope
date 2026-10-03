@@ -131,6 +131,52 @@ final class HistoryDatabaseQueryTests: XCTestCase {
         }
     }
 
+    func testHistoryAppBreakdownUsesSameTierRoutingAsChart() async throws {
+        let (db, _, end) = try await fixture(.d7)
+        let window = interval(0, end)
+        let chart = try await db.historyEnergy(in: window, range: .d7)
+        let expected = Dictionary(uniqueKeysWithValues: HistoryMath.apps(chart).map {
+            HistoryDatabase.AppBreakdownEntry(bundleIdentifier: $0.bundleIdentifier, processName: $0.name,
+                                              path: $0.path, totalEnergyNJ: $0.energyNJ, totalCPUNS: $0.cpuNS,
+                                              isSystem: $0.isSystem)
+        }.map { ($0.id, $0) })
+        let actual = try await db.historyAppBreakdown(in: window, range: .d7)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: actual.map { ($0.id, $0.totalEnergyNJ) }),
+                       expected.mapValues(\.totalEnergyNJ))
+        XCTAssertGreaterThan(actual.reduce(Int64(0)) { $0 + $1.totalEnergyNJ }, 0)
+    }
+
+    func testRawCSVIntervalClipsToConfiguredRetention() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        try await db.setRawRetentionDays(2)
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let requested = DateInterval(start: now.addingTimeInterval(-7 * 86_400), end: now)
+        let actual = try await db.rawCSVInterval(in: requested, now: now)
+        XCTAssertEqual(actual.start, now.addingTimeInterval(-2 * 86_400))
+        XCTAssertEqual(actual.end, now)
+    }
+
+    func testIntelMenuBarPresentationUsesCPUWithoutEnergyJoules() {
+        XCTAssertEqual(MenuBarMetricPresentation.value(energyNJ: 0, cpuNS: 8_000_000_000, energyAvailable: false), 8_000_000_000)
+        XCTAssertEqual(MenuBarMetricPresentation.systemSummary(count: 3, energyNJ: 0, cpuNS: 8_000_000_000, energyAvailable: false), "3 procs · 8.0 s CPU")
+        XCTAssertEqual(MenuBarMetricPresentation.systemSummary(count: 3, energyNJ: 0, cpuNS: 8_000_000_000, energyAvailable: true), "3 procs · 0.00 J")
+    }
+
+    func testRoutedHistoryAppBreakdownKeepsIntelCPUOnlyRows() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let appID = try await db.upsertApp(groupKey: "com.example.intel", bundleIdentifier: "com.example.intel",
+                                           displayName: "Intel App", path: "/Apps/Intel.app", ts: 0)
+        try await db.dbPool.write { conn in
+            try AppSampleRaw(ts: 1_000, appId: appID, pid: 77, parentPid: nil,
+                             metricVersion: EnergyMetric.currentVersion, energyNJ: 0, cpuNs: 4_000_000_000,
+                             wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0).insert(conn)
+        }
+        let rows = try await db.historyAppBreakdown(in: interval(0, 30_000), range: .live)
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].totalEnergyNJ, 0)
+        XCTAssertEqual(rows[0].totalCPUNS, 4_000_000_000)
+    }
+
     func testHardwareRollupsAndRawTailMatchRawTotals() async throws {
         for range in HistoryRange.allCases {
             let (db, raw, end) = try await fixture(range)

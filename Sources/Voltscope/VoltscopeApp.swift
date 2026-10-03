@@ -52,11 +52,12 @@ struct VoltscopeApp: App {
 struct SystemAppSummary: Equatable {
     let count: Int
     let totalEnergyNJ: Int64
+    let totalCPUNS: Int64
     /// Top N system processes by energy in the window — surfaced inline when
     /// the dropdown's System section is expanded so the disclosure has actual
     /// content rather than a single "open History" sentence.
     let topItems: [HistoryDatabase.TopAppEnergy]
-    static let empty = SystemAppSummary(count: 0, totalEnergyNJ: 0, topItems: [])
+    static let empty = SystemAppSummary(count: 0, totalEnergyNJ: 0, totalCPUNS: 0, topItems: [])
 }
 
 @MainActor
@@ -288,6 +289,7 @@ final class AppState: ObservableObject {
             self.systemSummary = SystemAppSummary(
                 count: systemEntries.count,
                 totalEnergyNJ: systemEntries.reduce(0) { $0 + $1.totalEnergyNJ },
+                totalCPUNS: systemEntries.reduce(0) { $0 + $1.totalCPUNS },
                 topItems: Array(systemTop)
             )
             if let active = try? await db.bucketSamplerActive(withinMinutes: 5) {
