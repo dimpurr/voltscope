@@ -352,6 +352,11 @@ public extension HistoryDatabase {
     /// Asks SQLite to reclaim a bounded number of pages in incremental mode.
     func incrementalVacuum() async throws {
         try await dbPool.write { db in try db.execute(sql: "PRAGMA incremental_vacuum(2000)") }
+        // Checkpoint outside a transaction so the reclaimed database tail is
+        // reflected in the main file and the reusable WAL is truncated.
+        try await dbPool.writeWithoutTransaction { db in
+            try db.execute(sql: "PRAGMA wal_checkpoint(TRUNCATE)")
+        }
     }
 
     private static func watermark(_ db: Database, key: String) throws -> Int64 {

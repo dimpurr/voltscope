@@ -211,6 +211,9 @@ Populated only when helper is installed. Contains powermetrics-derived joule rat
    persisted as-is.
 4. The existing five-minute checkpoint timer runs the maintenance phases:
    minute rollup, hour rollup, retention pruning, and bounded incremental vacuum.
+   It then requests an out-of-transaction `wal_checkpoint(TRUNCATE)` so the
+   reclaimed database tail reaches the main file and the WAL can be truncated.
+   An active reader may defer the truncate; the next five-minute pass retries.
    Each rollup is idempotent and advances its watermark with the transaction.
 
 ### Battery Sampling Loop (every 30s)
@@ -289,7 +292,11 @@ report measures a 54.23-byte average with the raw columns and timestamp index:
 about 20.2 MB/day and 141.1 MB for seven days on Apple silicon, and 16.1
 MB/day / 112.6 MB for seven days on Intel. Actual size varies with process
 count, values, indexes, WAL activity, and page reuse. Thirty-day raw retention
-can exceed the default budget by design.
+can exceed the default budget by design. These are raw-tier estimates, not a
+total-database size cap: `BatteryStatus` is sampled every 30 seconds and is not
+currently pruned, while hourly rollups are retained indefinitely. The raw tier
+can reach a bounded seven-day row count even as the whole database continues to
+grow slowly.
 
 ## Permissions Model
 
