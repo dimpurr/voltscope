@@ -18,8 +18,8 @@ keeps monitoring data on your Mac and sends no telemetry, analytics, or remote
 crash reports.
 
 <div align="center">
-  <img src="docs/assets/voltscope-history.png" alt="Voltscope History window showing battery level, stacked app energy, and the Energy breakdown and Apps columns" width="68%" />
-  <img src="docs/assets/voltscope-menu-panel.png" alt="Voltscope menu bar battery panel showing current charge, health, top energy use, and History actions" width="25%" />
+  <img src="docs/screenshots/2026-09-12-history-window.png" alt="Voltscope History window showing battery level, stacked app energy, and the Energy breakdown and Apps columns" width="68%" />
+  <img src="docs/screenshots/2026-09-12-menu-panel.png" alt="Voltscope menu bar battery panel showing current charge, health, top energy use, and History actions" width="25%" />
 </div>
 
 ## Install

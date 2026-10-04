@@ -81,10 +81,14 @@ the final network gate below passes.
      --dmg-name Voltscope-0.9.0-universal2.dmg
    ```
 
-   For the v0.9.0 migration, publish the same `appcast.xml` at the legacy
-   GitHub Pages path `https://dimpurr.github.io/voltscope/appcast.xml` and
-   verify that URL separately if supporting existing 0.8.1 clients. Do not
-   call the release complete if either required feed is missing.
+   Installs older than 0.9.0 still read the legacy feed
+   `https://dimpurr.github.io/voltscope/appcast.xml`, served by GitHub Pages
+   from the `gh-pages` branch (the `github.io` URL redirects to the account's
+   custom domain). For every release, commit the same `appcast.xml` to
+   `gh-pages`, wait for the Pages build, and verify that both
+   `https://dimpurr.github.io/voltscope/appcast.xml` and the redirect target
+   return 200 with the new version. Do not call the release complete if either
+   required feed is missing or stale.
 
 8. Only after the gate passes, move the changelog entry to a dated `0.9.0`
    section and update any public “latest” copy.
