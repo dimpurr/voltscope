@@ -49,7 +49,7 @@ struct AppBreakdownList: View {
                             entry: entry,
                             sparkline: sparklines[entry.id] ?? [],
                             totalAll: totalEnergyNJ,
-                            muted: true,
+                            muted: false,
                             energyAvailable: energyAvailable,
                             range: range,
                             bucketSeconds: bucketSeconds

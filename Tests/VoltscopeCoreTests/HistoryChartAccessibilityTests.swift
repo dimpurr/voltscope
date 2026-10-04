@@ -150,6 +150,45 @@ final class HistoryChartAccessibilityTests: XCTestCase {
         ])
     }
 
+    func testBatteryLevelSeriesExcludeChargingAndSleepEvents() {
+        let snapshots = [
+            BatterySnapshot(timestamp: 0, levelPercent: 50, capacityMAh: nil, designMAh: nil, cycleCount: nil,
+                           voltageMV: nil, amperageMA: nil, temperatureC: nil, timeRemainingMin: nil,
+                           isCharging: true, isACPlugged: true),
+            BatterySnapshot(timestamp: 30_000, levelPercent: nil, capacityMAh: nil, designMAh: nil, cycleCount: nil,
+                           voltageMV: nil, amperageMA: nil, temperatureC: nil, timeRemainingMin: nil,
+                           isCharging: false, isACPlugged: false),
+            BatterySnapshot(timestamp: 60_000, levelPercent: 40, capacityMAh: nil, designMAh: nil, cycleCount: nil,
+                           voltageMV: nil, amperageMA: nil, temperatureC: nil, timeRemainingMin: nil,
+                           isCharging: false, isACPlugged: false),
+            BatterySnapshot(timestamp: 600_000, levelPercent: 80, capacityMAh: nil, designMAh: nil, cycleCount: nil,
+                           voltageMV: nil, amperageMA: nil, temperatureC: nil, timeRemainingMin: nil,
+                           isCharging: false, isACPlugged: false)
+        ]
+
+        let series = HistoryChartAccessibility.batteryLevelSeries(snapshots: snapshots, domain: date(0)...date(300))
+        let levels = series.flatMap { $0.points.map(\.value) }
+
+        XCTAssertEqual(levels, [50, 40])
+        XCTAssertFalse(levels.contains(100), "A charging snapshot must keep its observed level, not become 100%.")
+        XCTAssertFalse(levels.contains(0), "A missing observation must stay a gap, not become a 0% point.")
+        XCTAssertEqual(series.map(\.segment).sorted(), [1, 3])
+    }
+
+    func testBucketInspectorValueDistinguishesGapFromZero() {
+        let when = date(1_700_000_000)
+        let gap = HistoryChartAccessibility.bucketInspectorValue(date: when, recordedJoules: nil)
+        let zero = HistoryChartAccessibility.bucketInspectorValue(date: when, recordedJoules: 0)
+        let normal = HistoryChartAccessibility.bucketInspectorValue(date: when, recordedJoules: 12.34)
+
+        XCTAssertTrue(gap.contains("no recorded CPU energy reading"))
+        XCTAssertFalse(gap.contains("0.00"))
+        XCTAssertTrue(zero.contains("0.00 joules recorded CPU energy"))
+        XCTAssertFalse(zero.contains("no recorded CPU energy reading"))
+        XCTAssertTrue(normal.contains("12.34 joules recorded CPU energy"))
+        XCTAssertNotEqual(gap, zero)
+    }
+
     func testClipIntervalsDropsEmptyAndClampsPartialOverlaps() {
         let range = date(100)...date(200)
         let clipped = HistoryChartAccessibility.clipIntervals([

@@ -16,23 +16,9 @@ struct BatteryHistoryChart: View {
     }
 
     private var levels: [LevelPoint] {
-        var result: [LevelPoint] = []
-        var segment = 0
-        var previous: BatterySnapshot?
-        var lastEmitted: Int64 = 0
-        let resolution = max(30.0, domain.upperBound.timeIntervalSince(domain.lowerBound) / 400)
-        for (index, snapshot) in snapshots.enumerated() {
-            defer { previous = snapshot }
-            guard let level = snapshot.levelPercent else { segment += 1; continue }
-            let gap = previous.map { snapshot.timestamp - $0.timestamp > 90_000 || $0.levelPercent == nil } ?? true
-            if gap { segment += 1 }
-            let nextGap = index + 1 == snapshots.count || snapshots[index + 1].timestamp - snapshot.timestamp > 90_000 || snapshots[index + 1].levelPercent == nil
-            if gap || nextGap || previous?.levelPercent != level || Double(snapshot.timestamp - lastEmitted) >= resolution * 1000 {
-                result.append(LevelPoint(date: Date(timeIntervalSince1970: Double(snapshot.timestamp) / 1000), level: min(100, max(0, level)), segment: segment))
-                lastEmitted = snapshot.timestamp
-            }
+        HistoryChartAccessibility.batteryLevelPoints(snapshots: snapshots, domain: domain).map {
+            LevelPoint(date: $0.date, level: $0.level, segment: $0.segment)
         }
-        return result
     }
 
     private var charging: [DateInterval] {
@@ -73,11 +59,10 @@ struct BatteryHistoryChart: View {
     }
 
     private var chartDescriptor: HistoryAXChartDescriptor {
-        let grouped = Dictionary(grouping: levels.filter { domain.contains($0.date) }, by: \.segment)
-        let series = grouped.keys.sorted().map { segment in
-            HistoryAXSeries(name: "Battery level segment \(segment + 1)",
-                            points: grouped[segment, default: []].map {
-                                AXDataPoint(x: $0.date.timeIntervalSince1970, y: $0.level, label: $0.date.formatted())
+        let series = HistoryChartAccessibility.batteryLevelSeries(snapshots: snapshots, domain: domain).map { segment in
+            HistoryAXSeries(name: "Battery level segment \(segment.segment + 1)",
+                            points: segment.points.map {
+                                AXDataPoint(x: $0.date.timeIntervalSince1970, y: $0.value, label: $0.date.formatted())
                             }, isContinuous: true)
         }
         return HistoryAXChartDescriptor(title: "Battery level", summary: accessibilitySummary,

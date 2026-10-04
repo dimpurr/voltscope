@@ -20,6 +20,77 @@ public enum HistoryChartAccessibility {
         }
     }
 
+    public struct BatteryLevelPoint: Sendable, Equatable {
+        public let date: Date
+        public let level: Double
+        public let segment: Int
+        public init(date: Date, level: Double, segment: Int) {
+            self.date = date
+            self.level = level
+            self.segment = segment
+        }
+    }
+
+    public struct BatteryLevelSeries: Sendable, Equatable {
+        public let segment: Int
+        public let points: [Point]
+        public init(segment: Int, points: [Point]) {
+            self.segment = segment
+            self.points = points
+        }
+    }
+
+    /// Ordered battery level trace points derived only from battery snapshots.
+    /// Charging and sleep events are not inputs, so an event can never be
+    /// encoded as a level reading: a snapshot taken while charging keeps its
+    /// observed percentage instead of being forced to 100, and a missing
+    /// observation stays a gap instead of becoming a 0 point. `segment`
+    /// increments at gaps so the chart does not interpolate across missing data.
+    public static func batteryLevelPoints(snapshots: [BatterySnapshot], domain: ClosedRange<Date>) -> [BatteryLevelPoint] {
+        var result: [BatteryLevelPoint] = []
+        var segment = 0
+        var previous: BatterySnapshot?
+        var lastEmitted: Int64 = 0
+        let resolution = max(30.0, domain.upperBound.timeIntervalSince(domain.lowerBound) / 400)
+        for (index, snapshot) in snapshots.enumerated() {
+            defer { previous = snapshot }
+            guard let level = snapshot.levelPercent else { segment += 1; continue }
+            let gap = previous.map { snapshot.timestamp - $0.timestamp > 90_000 || $0.levelPercent == nil } ?? true
+            if gap { segment += 1 }
+            let nextGap = index + 1 == snapshots.count || snapshots[index + 1].timestamp - snapshot.timestamp > 90_000 || snapshots[index + 1].levelPercent == nil
+            if gap || nextGap || previous?.levelPercent != level || Double(snapshot.timestamp - lastEmitted) >= resolution * 1000 {
+                result.append(BatteryLevelPoint(date: Date(timeIntervalSince1970: Double(snapshot.timestamp) / 1000),
+                                                level: min(100, max(0, level)), segment: segment))
+                lastEmitted = snapshot.timestamp
+            }
+        }
+        return result
+    }
+
+    /// Chart descriptor series for the battery chart, grouped by trace segment.
+    /// Built from `batteryLevelPoints`, so charging and sleep events cannot
+    /// appear as battery level points. Only readings inside `domain` are kept.
+    public static func batteryLevelSeries(snapshots: [BatterySnapshot], domain: ClosedRange<Date>) -> [BatteryLevelSeries] {
+        let points = batteryLevelPoints(snapshots: snapshots, domain: domain).filter { domain.contains($0.date) }
+        let grouped = Dictionary(grouping: points, by: \.segment)
+        return grouped.keys.sorted().map { segment in
+            BatteryLevelSeries(segment: segment,
+                               points: grouped[segment, default: []].map { Point(date: $0.date, value: $0.level) })
+        }
+    }
+
+    /// Spoken value for a keyboard-inspected App CPU energy bucket. Names the
+    /// metric as recorded CPU energy (docs/ENERGY_MODEL.md: it is not an
+    /// allocation of whole-device battery drain) and distinguishes a missing
+    /// observation (a data gap) from a bucket recorded with zero energy.
+    public static func bucketInspectorValue(date: Date, recordedJoules: Double?) -> String {
+        let time = date.formatted(date: .abbreviated, time: .shortened)
+        guard let recordedJoules else {
+            return "\(time): no recorded CPU energy reading (gap in data)"
+        }
+        return "\(time): \(format(recordedJoules)) joules recorded CPU energy"
+    }
+
     /// Clips intervals to `range`, dropping intervals with no overlap and
     /// clamping partial overlaps to the range bounds. Used so spoken summaries
     /// only count charging and sleep time inside the selected domain.

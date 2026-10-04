@@ -156,6 +156,11 @@ private struct EnergyHoverOverlay: View {
     @State private var hovered: Date?
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
+    private var accessibilityValue: String {
+        guard let hovered else { return "No time bucket selected" }
+        return HistoryChartAccessibility.bucketInspectorValue(date: hovered, recordedJoules: model.bucketTotals[hovered])
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let frame = geometry[proxy.plotAreaFrame]
@@ -191,6 +196,7 @@ private struct EnergyHoverOverlay: View {
                     hovered = nil
                 }
                 .accessibilityLabel("App CPU energy time inspector")
+                .accessibilityValue(accessibilityValue)
                 .accessibilityHint("Use Left and Right arrow keys to inspect time buckets; Escape to dismiss")
             if let hovered {
                 let x = (proxy.position(forX: hovered.addingTimeInterval(Double(bucketSeconds) / 2)) ?? 0) + frame.minX

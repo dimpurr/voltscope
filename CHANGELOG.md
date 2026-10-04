@@ -18,7 +18,7 @@
 - Added accessibility announcements for History loading errors and resilient layout sizing for the time-range picker under enlarged text.
 - Enhanced History status bar accessibility with stable identifiers.
 - Enhanced Battery history chart accessibility: charging and sleep intervals are spoken in the VoiceOver summary with occurrence counts and totals clipped to the selected range, and the chart descriptor carries only real battery readings.
-- Added keyboard-based time slice scrubbing to the App CPU energy chart using arrow keys, and selection traits for legend items.
+- Added keyboard-based time slice scrubbing to the App CPU energy chart using arrow keys; the inspected bucket's time and recorded CPU energy reading are spoken, distinguishing a data gap from a zero-energy bucket. Legend items expose selection traits.
 - Consolidated hardware breakdown rows into unified accessibility elements reporting channel magnitude relative to the largest hardware channel.
 - Added per-app accessibility identifiers for rows in the History app breakdown list.
 
