@@ -3,6 +3,7 @@ import VoltscopeCore
 
 struct HistoryStatusBar: View {
     let battery: BatterySnapshot?
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(spacing: 24) {
@@ -26,6 +27,7 @@ struct HistoryStatusBar: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Battery \(chargeAccessibilityValue), \(chargeStateLabel.isEmpty ? "status unavailable" : chargeStateLabel.lowercased())")
+        .accessibilityIdentifier(AccessibilityIdentifiers.historyStatusCharge)
     }
 
     private var healthBlock: some View {
@@ -41,6 +43,7 @@ struct HistoryStatusBar: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Battery health \(healthAccessibilityValue), condition \(conditionText)")
+        .accessibilityIdentifier(AccessibilityIdentifiers.historyStatusHealth)
     }
 
     private var tempBlock: some View {
@@ -52,6 +55,7 @@ struct HistoryStatusBar: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Battery temperature \(temperatureAccessibilityValue)")
+        .accessibilityIdentifier(AccessibilityIdentifiers.historyStatusTemp)
     }
 
     private var timeBlock: some View {
@@ -63,6 +67,7 @@ struct HistoryStatusBar: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Time remaining: \(timeAccessibilityValue)")
+        .accessibilityIdentifier(AccessibilityIdentifiers.historyStatusTime)
     }
 
     private var drainBlock: some View {
@@ -77,6 +82,7 @@ struct HistoryStatusBar: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Battery power: \(drainAccessibilityValue)")
         .accessibilityHint(drainHelpText)
+        .accessibilityIdentifier(AccessibilityIdentifiers.historyStatusDrain)
     }
 
     private var drainHelpText: String {
@@ -89,7 +95,8 @@ struct HistoryStatusBar: View {
 
     private var drainIconColor: Color {
         guard let b = battery else { return .secondary }
-        return b.isCharging || b.isACPlugged ? .green : .yellow
+        if b.isCharging || b.isACPlugged { return .green }
+        return colorScheme == .light ? Color(nsColor: .systemOrange) : .yellow
     }
 
     private var drainText: String {

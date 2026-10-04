@@ -6,6 +6,7 @@ import VoltscopeCore
 struct VoltscopeApp: App {
     @NSApplicationDelegateAdaptor(VoltscopeAppDelegate.self) private var appDelegate
     @StateObject private var appState: AppState
+    @Environment(\.openWindow) private var openWindow
 
     init() {
         let state = AppState()
@@ -40,11 +41,26 @@ struct VoltscopeApp: App {
         .windowResizability(.contentSize)
 
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") {
+                    openWindow(id: "settings")
+                }
+                .keyboardShortcut(",", modifiers: .command)
+                .accessibilityIdentifier(AccessibilityIdentifiers.menuSettings)
+            }
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
                     appState.checkForUpdates()
                 }
                 .disabled(!appState.canCheckForUpdates)
+                .accessibilityIdentifier(AccessibilityIdentifiers.menuCheckForUpdates)
+            }
+            CommandGroup(after: .newItem) {
+                Button("Open History") {
+                    openWindow(id: "history")
+                }
+                .keyboardShortcut("1", modifiers: .command)
+                .accessibilityIdentifier(AccessibilityIdentifiers.menuOpenHistory)
             }
         }
     }

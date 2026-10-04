@@ -16,6 +16,16 @@ public enum AccessibilityIdentifiers {
     public static let historyExportCSV = "history.exportCSV"
     public static let historyClearAppSelection = "history.clearAppSelection"
     public static let historySystemProcesses = "history.systemProcesses"
+    public static let historyChartBattery = "history.chartBattery"
+    public static let historyChartEnergy = "history.chartEnergy"
+    public static let historyStatusCharge = "history.statusCharge"
+    public static let historyStatusHealth = "history.statusHealth"
+    public static let historyStatusTemp = "history.statusTemp"
+    public static let historyStatusTime = "history.statusTime"
+    public static let historyStatusDrain = "history.statusDrain"
+    public static func historyAppRow(appIdentity: String) -> String {
+        "history.appRow.\(appIdentity)"
+    }
     public static let settingsLaunchAtLogin = "settings.launchAtLogin"
     public static let settingsOpenLoginItems = "settings.openLoginItems"
     public static let settingsRawRetention = "settings.rawRetention"
@@ -63,5 +73,14 @@ public enum AccessibilityLabels {
         if isCharging { return "Power flowing into the battery (V × I); excludes system power" }
         if isACPlugged { return "Battery current magnitude while connected to AC; not total adapter power" }
         return "Battery discharge rate (V × I)"
+    }
+
+    public static func hardwareBucketValue(joulesText: String, percent: Double) -> String {
+        "\(joulesText), \(Int(percent.rounded())) percent of largest hardware channel"
+    }
+
+    public static func legendSelectionValue(selected: Bool, anySelected: Bool) -> String {
+        if selected { return "Highlighted" }
+        return anySelected ? "Muted" : "All apps shown"
     }
 }

@@ -16,6 +16,13 @@ final class AccessibilityIdentifierTests: XCTestCase {
             AccessibilityIdentifiers.historyExportCSV,
             AccessibilityIdentifiers.historyClearAppSelection,
             AccessibilityIdentifiers.historySystemProcesses,
+            AccessibilityIdentifiers.historyChartBattery,
+            AccessibilityIdentifiers.historyChartEnergy,
+            AccessibilityIdentifiers.historyStatusCharge,
+            AccessibilityIdentifiers.historyStatusHealth,
+            AccessibilityIdentifiers.historyStatusTemp,
+            AccessibilityIdentifiers.historyStatusTime,
+            AccessibilityIdentifiers.historyStatusDrain,
             AccessibilityIdentifiers.settingsLaunchAtLogin,
             AccessibilityIdentifiers.settingsOpenLoginItems,
             AccessibilityIdentifiers.settingsRawRetention,
@@ -41,6 +48,13 @@ final class AccessibilityIdentifierTests: XCTestCase {
             "history.exportCSV",
             "history.clearAppSelection",
             "history.systemProcesses",
+            "history.chartBattery",
+            "history.chartEnergy",
+            "history.statusCharge",
+            "history.statusHealth",
+            "history.statusTemp",
+            "history.statusTime",
+            "history.statusDrain",
             "settings.launchAtLogin",
             "settings.openLoginItems",
             "settings.rawRetention",
@@ -112,5 +126,31 @@ final class AccessibilityIdentifierTests: XCTestCase {
             AccessibilityLabels.menuBarAppRowValue(energyNJ: 0, cpuNS: 1_500_000_000, energyAvailable: false),
             "1.5s CPU time"
         )
+    }
+
+    func testAppRowIdentifiersIncludeStableAppIdentity() {
+        let chrome = AccessibilityIdentifiers.historyAppRow(appIdentity: "com.google.Chrome")
+        let finder = AccessibilityIdentifiers.historyAppRow(appIdentity: "Finder")
+
+        XCTAssertEqual(chrome, "history.appRow.com.google.Chrome")
+        XCTAssertEqual(finder, "history.appRow.Finder")
+        XCTAssertNotEqual(chrome, finder)
+    }
+
+    func testHardwareBucketValueFormatsJoulesAndPercentage() {
+        XCTAssertEqual(
+            AccessibilityLabels.hardwareBucketValue(joulesText: "245 J", percent: 100),
+            "245 J, 100 percent of largest hardware channel"
+        )
+        XCTAssertEqual(
+            AccessibilityLabels.hardwareBucketValue(joulesText: "12.3 J", percent: 45.4),
+            "12.3 J, 45 percent of largest hardware channel"
+        )
+    }
+
+    func testLegendSelectionValue() {
+        XCTAssertEqual(AccessibilityLabels.legendSelectionValue(selected: true, anySelected: true), "Highlighted")
+        XCTAssertEqual(AccessibilityLabels.legendSelectionValue(selected: false, anySelected: true), "Muted")
+        XCTAssertEqual(AccessibilityLabels.legendSelectionValue(selected: false, anySelected: false), "All apps shown")
     }
 }

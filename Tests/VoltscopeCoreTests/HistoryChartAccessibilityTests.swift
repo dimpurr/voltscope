@@ -69,4 +69,32 @@ final class HistoryChartAccessibilityTests: XCTestCase {
         XCTAssertTrue(summary.contains(date(90).formatted(date: .abbreviated, time: .shortened)))
         XCTAssertTrue(summary.contains(date(210).formatted(date: .abbreviated, time: .shortened)))
     }
+
+    func testBatterySummaryIncludesChargingAndSleepIntervals() {
+        let charging = [
+            DateInterval(start: date(10), end: date(70)),
+            DateInterval(start: date(100), end: date(160))
+        ]
+        let sleep = [
+            DateInterval(start: date(200), end: date(290))
+        ]
+        let summary = HistoryChartAccessibility.summary(
+            title: "Battery level", range: date(0)...date(300),
+            points: [.init(date: date(0), value: 50), .init(date: date(300), value: 60)],
+            unit: "percent",
+            chargingIntervals: charging,
+            sleepIntervals: sleep
+        )
+
+        XCTAssertTrue(summary.contains("Charging: 2 intervals, total 2 min"))
+        XCTAssertTrue(summary.contains("Sleep: 1 period, total 1 min"))
+    }
+
+    func testFormatDuration() {
+        XCTAssertEqual(HistoryChartAccessibility.formatDuration(45), "45 s")
+        XCTAssertEqual(HistoryChartAccessibility.formatDuration(120), "2 min")
+        XCTAssertEqual(HistoryChartAccessibility.formatDuration(3600), "1 hr")
+        XCTAssertEqual(HistoryChartAccessibility.formatDuration(3660), "1 hr 1 min")
+        XCTAssertEqual(HistoryChartAccessibility.formatDuration(7320), "2 hr 2 min")
+    }
 }

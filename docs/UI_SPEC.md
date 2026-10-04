@@ -275,6 +275,14 @@ Their public English values and controls are:
 | `history.exportCSV` | Export as CSV action |
 | `history.clearAppSelection` | Clear selected app action |
 | `history.systemProcesses` | System processes row in the History app breakdown |
+| `history.chartBattery` | History battery level chart |
+| `history.chartEnergy` | History app CPU energy stacked chart |
+| `history.statusCharge` | History status bar battery charge block |
+| `history.statusHealth` | History status bar battery health block |
+| `history.statusTemp` | History status bar battery temperature block |
+| `history.statusTime` | History status bar battery time remaining block |
+| `history.statusDrain` | History status bar battery power and drain block |
+| `history.appRow.<app-identity>` | Per-app row in History app breakdown; `<app-identity>` is the bundle identifier, or the process name when no bundle identifier is available |
 | `settings.launchAtLogin` | Launch at login toggle |
 | `settings.openLoginItems` | Open Login Items action |
 | `settings.rawRetention` | Raw detail retention period picker |
@@ -297,7 +305,18 @@ The History status bar's battery power value keeps its state-specific qualifier
 available both as hover help and as the combined accessibility element's hint.
 The qualifier distinguishes charging flow, battery discharge, and battery
 current while connected to AC; it does not describe total system or adapter
-power.
+power. In light mode, the discharging indicator uses an adaptive amber color to
+meet WCAG contrast requirements.
+
+History charts provide full assistive technology coverage: the battery chart
+describes charging intervals and sleep periods in its Audio Graph and VoiceOver
+summary, and visual axis labels are hidden to avoid redundant spoken numbers.
+The App CPU energy chart supports keyboard-based slice scrubbing via arrow keys,
+legend buttons announce highlighted status, and legacy bucket intervals include
+dashed boundary indicators. Hardware breakdown rows group channel metrics into
+single VoiceOver elements expressing relative magnitudes of the largest hardware
+channel, and app breakdown rows support keyboard selection with chart highlight
+synchronization.
 
 ### Chart hover behavior (v0.5.2)
 

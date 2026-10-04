@@ -14,6 +14,13 @@
 - Label database migration progress and surface deletion errors in Settings.
 - Add stable accessibility identifiers for onboarding action buttons in the Welcome window.
 - Display an alert dialog on CSV export interval calculation failure instead of failing silently.
+- Added standard application menu shortcuts for Settings (`Cmd+,`) and Open History (`Cmd+1`).
+- Added accessibility announcements for History loading errors and resilient layout sizing for the time-range picker under enlarged text.
+- Enhanced History status bar accessibility with stable identifiers and adaptive light-mode contrast for the battery discharging power icon.
+- Enhanced Battery history chart accessibility descriptor with discrete Audio Graph series for charging intervals and sleep periods, and included interval totals in spoken VoiceOver summaries.
+- Added keyboard-based time slice scrubbing to the App CPU energy chart using arrow keys, selection traits for legend items, and dashed boundaries for legacy bucket intervals.
+- Consolidated hardware breakdown rows into unified accessibility elements reporting channel magnitude relative to the largest channel, and boosted Camera channel contrast in light mode.
+- Added keyboard focus, click-to-highlight synchronization, and per-app accessibility identifiers for rows in the History app breakdown list.
 
 ## 0.10.2 — 2026-10-04
 

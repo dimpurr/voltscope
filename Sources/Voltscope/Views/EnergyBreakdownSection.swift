@@ -49,6 +49,7 @@ struct EnergyBreakdownSection: View {
             HStack(spacing: 6) {
                 Image(systemName: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
+                    .accessibilityHidden(true)
                 Text("Hardware bucket sampling unavailable on this system")
                     .font(.caption.bold())
                     .foregroundStyle(.secondary)
@@ -59,6 +60,7 @@ struct EnergyBreakdownSection: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.leading, 8)
+        .accessibilityElement(children: .combine)
     }
 
     private var largestChannelJ: Double {
@@ -70,6 +72,7 @@ private struct BucketRow: View {
     let summary: HistoryDatabase.BucketSummary
     let totalJ: Double
     let bucketSeconds: Int
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let joules = Double(summary.totalEnergyNJ) / 1_000_000_000.0
@@ -79,12 +82,14 @@ private struct BucketRow: View {
             Image(systemName: bucketIcon(summary.bucketName))
                 .foregroundStyle(color)
                 .frame(width: 18)
+                .accessibilityHidden(true)
             Text(summary.bucketName)
                 .lineLimit(1)
                 .help(summary.bucketName)
             Spacer(minLength: 8)
             BucketBar(percent: percent, color: color)
                 .help("Relative channel magnitude; the largest channel fills the bar. Channels may overlap and are not percentages of battery drain.")
+                .accessibilityHidden(true)
             Text(joulesText(joules))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.primary)
@@ -96,7 +101,12 @@ private struct BucketRow: View {
                 },
                 color: color
             )
+            .accessibilityHidden(true)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(summary.bucketName)
+        .accessibilityValue(AccessibilityLabels.hardwareBucketValue(joulesText: joulesText(joules), percent: percent))
+        .accessibilityHint("Independent hardware channel; not a percentage of battery drain.")
     }
 
     private func bucketColor(_ name: String) -> Color {
@@ -105,7 +115,7 @@ private struct BucketRow: View {
         case "GPU":         return .purple
         case "ANE":         return .red
         case "Video":       return .pink
-        case "Camera":      return .yellow
+        case "Camera":      return colorScheme == .light ? Color(nsColor: .systemOrange) : .yellow
         case "DRAM":        return .brown
         case "Fabric":      return .green
         case "Display":     return .orange

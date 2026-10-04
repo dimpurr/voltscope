@@ -36,6 +36,8 @@ struct HistoryWindow: View {
                     if let errorMessage {
                         Label(errorMessage, systemImage: "exclamationmark.triangle")
                             .font(.caption).foregroundStyle(.orange)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityLabel("Error: \(errorMessage)")
                     }
                     if let data, loaded {
                         BatteryHistoryChart(snapshots: data.battery, events: data.events, domain: data.domain, selection: nil)
@@ -79,7 +81,8 @@ struct HistoryWindow: View {
                             Divider()
                             AppBreakdownList(entries: data.apps.map(\.breakdownEntry), sparklines: data.sparklines,
                                              groupSystem: groupSystem, energyAvailable: appState.processEnergyAvailable,
-                                             range: data.domain, bucketSeconds: range.bucketSeconds)
+                                             range: data.domain, bucketSeconds: range.bucketSeconds,
+                                             selectedApp: $selectedApp)
                                 .frame(maxWidth: .infinity, alignment: .topLeading)
                         }
                     } else {
@@ -92,6 +95,20 @@ struct HistoryWindow: View {
         .toolbar { toolbar }
         .onChange(of: groupSystem) { _ in rebuildModel() }
         .onChange(of: selectedApp) { _ in rebuildModel() }
+        .onChange(of: errorMessage) { msg in
+            if let msg {
+                if #available(macOS 14.0, *) {
+                    AccessibilityNotification.Announcement("Error: \(msg)").post()
+                } else {
+                    let element: Any = NSApp.mainWindow ?? NSApp
+                    NSAccessibility.post(
+                        element: element,
+                        notification: .announcementRequested,
+                        userInfo: [.announcement: "Error: \(msg)", .priority: NSAccessibilityPriorityLevel.high.rawValue]
+                    )
+                }
+            }
+        }
         .task {
             guard let db = appState.database, !rangeManuallyChosen else { return }
             if let earliest = try? await db.earliestSampleTimestamp(), !rangeManuallyChosen {
@@ -117,7 +134,7 @@ struct HistoryWindow: View {
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .principal) {
             Picker("Time range", selection: $range) { ForEach(Range.allCases) { Text($0.rawValue).tag($0) } }
-                .pickerStyle(.segmented).frame(width: 280)
+                .pickerStyle(.segmented).frame(minWidth: 280)
                 .accessibilityLabel("Time range")
                 .accessibilityIdentifier(AccessibilityIdentifiers.historyTimeRange)
                 .onChange(of: range) { _ in rangeManuallyChosen = true }

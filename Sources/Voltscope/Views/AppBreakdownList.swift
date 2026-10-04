@@ -9,6 +9,7 @@ struct AppBreakdownList: View {
     let energyAvailable: Bool
     let range: ClosedRange<Date>
     let bucketSeconds: Int
+    @Binding var selectedApp: String?
 
     var body: some View {
         // No internal ScrollView — HistoryWindow wraps the whole panel in a
@@ -26,10 +27,11 @@ struct AppBreakdownList: View {
                     entry: entry,
                     sparkline: sparklines[entry.id] ?? [],
                     totalAll: totalEnergyNJ,
-                    muted: false,
+                    muted: selectedApp != nil && selectedApp != entry.id,
                     energyAvailable: energyAvailable,
                     range: range,
-                    bucketSeconds: bucketSeconds
+                    bucketSeconds: bucketSeconds,
+                    selectedApp: $selectedApp
                 )
             }
 
@@ -41,7 +43,8 @@ struct AppBreakdownList: View {
                         totalAll: totalEnergyNJ,
                         energyAvailable: energyAvailable,
                         range: range,
-                        bucketSeconds: bucketSeconds
+                        bucketSeconds: bucketSeconds,
+                        selectedApp: $selectedApp
                     )
                 } else {
                     ForEach(systemEntries) { entry in
@@ -49,10 +52,11 @@ struct AppBreakdownList: View {
                             entry: entry,
                             sparkline: sparklines[entry.id] ?? [],
                             totalAll: totalEnergyNJ,
-                            muted: false,
+                            muted: selectedApp != nil && selectedApp != entry.id,
                             energyAvailable: energyAvailable,
                             range: range,
-                            bucketSeconds: bucketSeconds
+                            bucketSeconds: bucketSeconds,
+                            selectedApp: $selectedApp
                         )
                     }
                 }
@@ -88,36 +92,51 @@ private struct AppRow: View {
     let energyAvailable: Bool
     let range: ClosedRange<Date>
     let bucketSeconds: Int
+    @Binding var selectedApp: String?
+    @Environment(\.colorSchemeContrast) private var colorContrast
 
     var body: some View {
-        HStack(spacing: 8) {
-            AppIconView(path: entry.path, bundleId: entry.bundleIdentifier, size: 16)
-                .opacity(muted ? 0.55 : 1)
-            Text(entry.processName)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .foregroundStyle(muted ? Color.secondary : Color.primary)
-            Spacer(minLength: 8)
-            Text(energyAvailable ? joulesText : cpuText)
-                .font(.callout.monospacedDigit())
-                .foregroundStyle(muted ? Color.secondary : Color.primary)
-                .frame(width: 70, alignment: .trailing)
-            Text(percentText)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.tertiary)
-                .frame(width: 40, alignment: .trailing)
-            SparklineMini(
-                points: sparkline,
-                color: muted ? .secondary : .accentColor,
-                width: 80,
-                height: 18
-            )
+        Button {
+            selectedApp = selectedApp == entry.id ? nil : entry.id
+        } label: {
+            HStack(spacing: 8) {
+                AppIconView(path: entry.path, bundleId: entry.bundleIdentifier, size: 16)
+                    .opacity(muted ? 0.55 : 1)
+                    .accessibilityHidden(true)
+                Text(entry.processName)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .foregroundStyle(muted ? Color.secondary : Color.primary)
+                Spacer(minLength: 8)
+                Text(energyAvailable ? joulesText : cpuText)
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(muted ? Color.secondary : Color.primary)
+                    .frame(width: 70, alignment: .trailing)
+                Text(percentText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(colorContrast == .increased ? Color.primary : Color.secondary)
+                    .frame(width: 40, alignment: .trailing)
+                SparklineMini(
+                    points: sparkline,
+                    color: muted ? .secondary : .accentColor,
+                    width: 80,
+                    height: 18
+                )
+                .accessibilityHidden(true)
+            }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .help(entry.bundleIdentifier ?? entry.processName)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(entry.processName)
         .accessibilityValue(accessibilityValue)
         .accessibilityChartDescriptor(chartDescriptor)
+        .accessibilityIdentifier(AccessibilityIdentifiers.historyAppRow(appIdentity: entry.id))
+        .accessibilityAddTraits(selectedApp == entry.id ? [.isSelected] : [])
+        .accessibilityAction(named: selectedApp == entry.id ? "Clear app highlight" : "Highlight app in chart") {
+            selectedApp = selectedApp == entry.id ? nil : entry.id
+        }
     }
 
     private var chartDescriptor: HistoryAXChartDescriptor {
@@ -169,6 +188,7 @@ private struct SystemGroupSection: View {
     let energyAvailable: Bool
     let range: ClosedRange<Date>
     let bucketSeconds: Int
+    @Binding var selectedApp: String?
     @State private var expanded = false
 
     var body: some View {
@@ -179,10 +199,11 @@ private struct SystemGroupSection: View {
                         entry: entry,
                         sparkline: sparklines[entry.id] ?? [],
                         totalAll: totalAll,
-                        muted: true,
+                        muted: selectedApp != nil && selectedApp != entry.id,
                         energyAvailable: energyAvailable,
                         range: range,
-                        bucketSeconds: bucketSeconds
+                        bucketSeconds: bucketSeconds,
+                        selectedApp: $selectedApp
                     )
                 }
             }

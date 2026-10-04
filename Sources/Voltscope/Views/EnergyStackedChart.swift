@@ -61,7 +61,9 @@ struct EnergyStackedChart: View {
             Text(model.upper.formatted(.number.precision(.fractionLength(1))))
             Spacer(); Text((model.upper / 2).formatted(.number.precision(.fractionLength(1))))
             Spacer(); Text("0").padding(.bottom, 22)
-        }.font(.caption2.monospacedDigit()).foregroundStyle(.secondary).frame(width: 38)
+        }
+        .font(.caption2.monospacedDigit()).foregroundStyle(.secondary).frame(width: 38)
+        .accessibilityHidden(true)
     }
 
     var body: some View {
@@ -75,7 +77,11 @@ struct EnergyStackedChart: View {
                             yStart: .value("Older method", 0), yEnd: .value("Older method", model.upper)
                         )
                         .foregroundStyle(.orange.opacity(0.18))
-                        .accessibilityLabel("Data recorded with an older method")
+                        .accessibilityLabel("Data recorded with an older method; not added to current readings")
+                        RuleMark(x: .value("Older method boundary", date))
+                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 2]))
+                            .foregroundStyle(.orange.opacity(0.45))
+                            .accessibilityHidden(true)
                     }
                     ForEach(model.segments) { p in
                         RectangleMark(
@@ -103,6 +109,7 @@ struct EnergyStackedChart: View {
                 .accessibilityLabel("App CPU energy chart")
                 .accessibilityValue(accessibilitySummary)
                 .accessibilityChartDescriptor(chartDescriptor)
+                .accessibilityIdentifier(AccessibilityIdentifiers.historyChartEnergy)
                 .chartOverlay { proxy in
                     EnergyHoverOverlay(model: model, bucketSeconds: bucketSeconds, domain: xDomain, proxy: proxy)
                 }
@@ -122,15 +129,23 @@ struct EnergyStackedChart: View {
         HStack(spacing: 14) {
             ForEach(model.series) { series in
                 let id = series.id
+                let isSelected = selectedApp == id
                 Button {
-                    selectedApp = selectedApp == id ? nil : id
+                    selectedApp = isSelected ? nil : id
                 } label: {
                     HStack(spacing: 4) {
                         Circle().fill(color(id)).frame(width: 7, height: 7)
+                            .accessibilityHidden(true)
                         Text(series.name).lineLimit(1).frame(maxWidth: 140, alignment: .leading)
                     }
-                    .opacity(selectedApp == nil || selectedApp == id ? 1 : 0.45)
-                }.buttonStyle(.plain).help(series.name)
+                    .opacity(selectedApp == nil || isSelected ? 1 : 0.45)
+                }
+                .buttonStyle(.plain)
+                .help(series.name)
+                .accessibilityLabel(series.name)
+                .accessibilityValue(AccessibilityLabels.legendSelectionValue(selected: isSelected, anySelected: selectedApp != nil))
+                .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+                .accessibilityHint(isSelected ? "Double tap to clear app highlight" : "Double tap to highlight app in chart")
             }
         }.font(.caption).fixedSize(horizontal: true, vertical: false)
     }
@@ -143,6 +158,7 @@ private struct EnergyHoverOverlay: View {
     let domain: ClosedRange<Date>
     let proxy: ChartProxy
     @State private var hovered: Date?
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         GeometryReader { geometry in
@@ -157,6 +173,29 @@ private struct EnergyHoverOverlay: View {
                     case .ended: hovered = nil
                     }
                 }
+                .focusable()
+                .onMoveCommand { direction in
+                    let step = Double(bucketSeconds)
+                    let current = hovered ?? (direction == .left ? domain.upperBound : domain.lowerBound)
+                    let nextTime: Double
+                    switch direction {
+                    case .left:
+                        nextTime = current.timeIntervalSince1970 - step
+                    case .right:
+                        nextTime = current.timeIntervalSince1970 + step
+                    default:
+                        return
+                    }
+                    let clamped = max(domain.lowerBound.timeIntervalSince1970,
+                                      min(domain.upperBound.timeIntervalSince1970, nextTime))
+                    let bucket = Date(timeIntervalSince1970: floor(clamped / step) * step)
+                    hovered = bucket
+                }
+                .onExitCommand {
+                    hovered = nil
+                }
+                .accessibilityLabel("App CPU energy time inspector")
+                .accessibilityHint("Use Left and Right arrow keys to inspect time buckets; Escape to dismiss")
             if let hovered {
                 let x = (proxy.position(forX: hovered.addingTimeInterval(Double(bucketSeconds) / 2)) ?? 0) + frame.minX
                 Path { path in
@@ -174,7 +213,13 @@ private struct EnergyHoverOverlay: View {
                 }
                 .font(.caption2).padding(8)
                 .frame(width: min(230, frame.width - 8), alignment: .leading)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                .background {
+                    if reduceTransparency {
+                        RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .windowBackgroundColor))
+                    } else {
+                        RoundedRectangle(cornerRadius: 8).fill(.regularMaterial)
+                    }
+                }
                 .position(x: min(frame.maxX - 119, max(frame.minX + 119, x)), y: frame.minY + 54)
                 .allowsHitTesting(false)
             }
