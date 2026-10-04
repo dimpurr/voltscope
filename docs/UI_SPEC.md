@@ -314,7 +314,7 @@ descriptor carries only real battery readings; visual axis labels are hidden to
 avoid redundant spoken numbers.
 The App CPU energy chart supports keyboard-based slice scrubbing via arrow keys;
 the inspected bucket's time and recorded CPU energy reading are spoken as a
-dynamic value, where a data gap is distinct from a recorded zero-energy bucket.
+dynamic value, where a bucket with no record is distinct from a recorded zero-energy bucket.
 Legend buttons announce highlighted status. Hardware breakdown rows group
 channel metrics into single VoiceOver elements expressing relative magnitudes of
 the largest hardware channel, and app breakdown rows expose per-app

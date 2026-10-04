@@ -175,18 +175,19 @@ final class HistoryChartAccessibilityTests: XCTestCase {
         XCTAssertEqual(series.map(\.segment).sorted(), [1, 3])
     }
 
-    func testBucketInspectorValueDistinguishesGapFromZero() {
+    func testBucketInspectorValueDistinguishesNoRecordFromZeroFromNormal() {
         let when = date(1_700_000_000)
-        let gap = HistoryChartAccessibility.bucketInspectorValue(date: when, recordedJoules: nil)
+        let noRecord = HistoryChartAccessibility.bucketInspectorValue(date: when, recordedJoules: nil)
         let zero = HistoryChartAccessibility.bucketInspectorValue(date: when, recordedJoules: 0)
         let normal = HistoryChartAccessibility.bucketInspectorValue(date: when, recordedJoules: 12.34)
 
-        XCTAssertTrue(gap.contains("no recorded CPU energy reading"))
-        XCTAssertFalse(gap.contains("0.00"))
+        XCTAssertTrue(noRecord.contains("no recorded CPU energy for this bucket"))
+        XCTAssertFalse(noRecord.contains("0.00"))
+        XCTAssertFalse(noRecord.contains("gap in data"))
         XCTAssertTrue(zero.contains("0.00 joules recorded CPU energy"))
-        XCTAssertFalse(zero.contains("no recorded CPU energy reading"))
+        XCTAssertFalse(zero.contains("no recorded CPU energy for this bucket"))
         XCTAssertTrue(normal.contains("12.34 joules recorded CPU energy"))
-        XCTAssertNotEqual(gap, zero)
+        XCTAssertNotEqual(noRecord, zero)
     }
 
     func testClipIntervalsDropsEmptyAndClampsPartialOverlaps() {

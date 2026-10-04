@@ -81,12 +81,16 @@ public enum HistoryChartAccessibility {
 
     /// Spoken value for a keyboard-inspected App CPU energy bucket. Names the
     /// metric as recorded CPU energy (docs/ENERGY_MODEL.md: it is not an
-    /// allocation of whole-device battery drain) and distinguishes a missing
-    /// observation (a data gap) from a bucket recorded with zero energy.
+    /// allocation of whole-device battery drain) and distinguishes a bucket
+    /// with no record from a bucket recorded with zero energy. A missing record
+    /// is not asserted to be a data gap: the model only builds totals for
+    /// buckets with observations, so an absent bucket may be idle or a missing
+    /// observation. Only call it a gap when there is actual evidence (e.g. the
+    /// bucket falls within a known coverage gap).
     public static func bucketInspectorValue(date: Date, recordedJoules: Double?) -> String {
         let time = date.formatted(date: .abbreviated, time: .shortened)
         guard let recordedJoules else {
-            return "\(time): no recorded CPU energy reading (gap in data)"
+            return "\(time): no recorded CPU energy for this bucket"
         }
         return "\(time): \(format(recordedJoules)) joules recorded CPU energy"
     }
