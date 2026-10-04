@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 0.10.1
+## 0.10.1 — 2026-10-04
 
 - Recheck the legacy SQLite source revision during import convergence so
   timestamp rollback commits are rescanned before completion.
