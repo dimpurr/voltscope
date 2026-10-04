@@ -163,18 +163,23 @@ Existing App and sample rows are not rewritten. History queries apply the same
 path rule to bundle-less version-named rows and add their energy and CPU within
 each chart bucket, so old versions can appear as one app when their stored path
 contains a meaningful parent. Rows without such paths remain separate. Raw CSV
-continues to report stored process/PID rows and is not rewritten or merged.
+exports current-metric-version process/PID rows and is not rewritten or merged.
+Its process name and path fields come from the App group row, so multiple PIDs
+in one group currently share that descriptive metadata; raw rows do not retain
+per-PID names or paths.
 
 ### Legacy database migration
 
 At launch, sampling begins against `history.sqlite` immediately. If an old
 `db.sqlite` exists and migration is incomplete, `LegacyDatabaseImporter` runs
-as a background task. It reads the source in read-only, hour-sized transactions,
-records a resumable cursor, verifies energy and battery counts, and then marks
-the migration complete. A completed source is eligible for automatic deletion
-seven days after completion; Settings also offers immediate deletion only after
-verification succeeds. A failed import keeps the source file and the app
-continues on the new store.
+as a background task. It reads the source in read-only, hour-sized transactions
+and records a resumable cursor. Before marking migration complete, it verifies
+energy and battery counts and checks both the newest source timestamp and the
+SQLite source revision; a changed source revision restarts the hour scan so
+commits with earlier timestamps are included. A completed source is eligible
+for automatic deletion seven days after completion; Settings also offers
+immediate deletion only after verification succeeds. A failed import keeps the
+source file and the app continues on the new store.
 
 ### `EnergyBaseline` (v1.5)
 
@@ -309,15 +314,15 @@ part of the current login-item setting and must not be used to implement it.
 History queries route to raw samples, minute summaries, or hour summaries based
 on the selected window. The not-yet-rolled-up tail is aggregated from raw rows.
 Every app and hardware query filters one metric version; older-version buckets
-are queried separately for the visual method marker. CSV reads the raw tier and
-exports the same selectable window as the interface. The shortest chart range
-uses raw; intermediate ranges, including the full-day view, use minute
-summaries; the week view uses permanent hour summaries. Range names and bucket
-widths are owned by [UI_SPEC.md](UI_SPEC.md). CSV uses an ordered raw database
-cursor and writes fixed-size batches so export memory does not grow with the
-selected interval. Cancellation stops cursor iteration and removes the
-incomplete output file. Two-day minute retention leaves a full day of margin
-for the full-day query.
+are queried separately for the visual method marker. CSV reads current-version
+rows from the raw tier and exports the same selectable window as the interface.
+The shortest chart range uses raw; intermediate ranges, including the full-day
+view, use minute summaries; the week view uses permanent hour summaries. Range
+names and bucket widths are owned by [UI_SPEC.md](UI_SPEC.md). CSV uses an
+ordered raw database cursor and writes fixed-size batches so export memory does
+not grow with the selected interval. Cancellation stops cursor iteration and
+removes the incomplete output file. Two-day minute retention leaves a full day
+of margin for the full-day query.
 
 The 7D query includes the whole hourly summary containing its left boundary,
 even when raw rows from that hour remain available. The first bar can therefore

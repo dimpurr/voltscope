@@ -623,6 +623,28 @@ final class HistoryDatabaseQueryTests: XCTestCase {
         XCTAssertEqual(Array(exportedLine.utf8), Array("0,1970-01-01T00:00:00.000Z,11,,com.example.alpha,Alpha,/Apps/Alpha.app,14,7,1,21,28,1\n".utf8))
     }
 
+    func testCSVDefaultEnergyTotalUsesOnlyTheChartMetricVersion() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let appID = try await db.upsertApp(groupKey: "com.example.versioned", bundleIdentifier: "com.example.versioned",
+                                           displayName: "Versioned", path: "/Apps/Versioned.app", ts: 0)
+        try await db.dbPool.write { conn in
+            try AppSampleRaw(ts: 0, appId: appID, pid: 42, parentPid: nil,
+                             metricVersion: EnergyMetric.legacyVersion, energyNJ: 100, cpuNs: 0,
+                             wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0).insert(conn)
+            try AppSampleRaw(ts: 30_000, appId: appID, pid: 42, parentPid: nil,
+                             metricVersion: EnergyMetric.currentVersion, energyNJ: 20, cpuNs: 0,
+                             wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0).insert(conn)
+        }
+
+        let interval = interval(0, 60_000)
+        let chart = try await db.historyEnergy(in: interval, range: .live)
+        let csv = try await db.historySamplesForCSV(in: interval)
+        XCTAssertEqual(chart.reduce(Int64(0)) { $0 + $1.energyNJ }, 20)
+        XCTAssertEqual(csv.reduce(Int64(0)) { $0 + $1.energyNJ }, 20,
+                       "default CSV energy sums must use the same metric version as the chart")
+        XCTAssertTrue(csv.allSatisfy { $0.metricVersion == EnergyMetric.currentVersion })
+    }
+
     func testCSVBatchOutputMatchesLegacyArrayOutputByteForByte() async throws {
         let (db, _, end) = try await fixture(.live)
         let window = interval(0, end)

@@ -208,6 +208,11 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         let latestTimestamp: Int64
     }
 
+    private struct LegacySourceRevision: Equatable {
+        let dataVersion: Int64
+        let rowCounts: [Int64]
+    }
+
     private func performRun() async throws {
         var wasDone = false
         do {
@@ -299,6 +304,7 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         while true {
             try Task.checkCancellation()
             round += 1
+            let sourceRevision = try Self.readSourceRevision(source)
             if anchor == nil {
                 anchor = min(bounds.latestTimestamp, Int64(now().timeIntervalSince1970 * 1000))
                 try await setMeta("legacy.windowAnchor", value: String(anchor!))
@@ -366,6 +372,11 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
+                if try Self.readSourceRevision(source) != sourceRevision {
+                    bounds = try Self.readBounds(source) ?? bounds
+                    try await setMeta("legacy.cursorHour", value: String(bounds.minHour - 1))
+                    continue
+                }
                 // Record the same boundary cursor before the outer handler
                 // stores `failed`, so a retry re-reads the open hour rather
                 // than skipping it past a possibly stale snapshot.
@@ -376,15 +387,17 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
             }
 
             guard let refreshed = try await refreshedBoundsOrFinish(source: source, bounds: bounds, round: round,
-                                                                     rawCutoff: verificationRawCutoff) else { return }
+                                                                     rawCutoff: verificationRawCutoff,
+                                                                     sourceRevision: sourceRevision) else { return }
             bounds = refreshed
         }
     }
 
     private func refreshedBoundsOrFinish(source: DatabaseQueue, bounds: LegacyBounds, round: Int,
-                                         rawCutoff: Int64) async throws -> LegacyBounds? {
+                                         rawCutoff: Int64, sourceRevision: LegacySourceRevision) async throws -> LegacyBounds? {
         let newest = try Self.readLatestTimestamp(source)
-        if newest == nil || newest! <= bounds.latestTimestamp {
+        let revisionUnchanged = try Self.readSourceRevision(source) == sourceRevision
+        if (newest == nil || newest! <= bounds.latestTimestamp), revisionUnchanged {
             let doneAt = Int64(now().timeIntervalSince1970 * 1000)
             try await history.dbPool.write { db in
                 try Self.putMeta(db, key: "legacy.rawCutoff", value: String(rawCutoff))
@@ -400,7 +413,24 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         guard let refreshed = try Self.readBounds(source) else {
             throw LegacyImportError.emptyLegacyEnergyHistory
         }
+        if !revisionUnchanged {
+            try await setMeta("legacy.cursorHour", value: String(refreshed.minHour - 1))
+        }
         return refreshed
+    }
+
+    /// `MAX(timestamp)` misses commits inserted after a clock rollback. SQLite's
+    /// data_version changes when another connection commits, while table row
+    /// counts also catch rows committed through this connection.
+    private static func readSourceRevision(_ source: DatabaseQueue) throws -> LegacySourceRevision {
+        try sourceRead(source) { db in
+            let dataVersion = try Int64.fetchOne(db, sql: "PRAGMA data_version") ?? 0
+            let tables = ["EnergyHistory", "SystemBuckets", "BatteryStatus", "PowerEvents"]
+            let counts = try tables.map { table in
+                try Int64.fetchOne(db, sql: "SELECT COUNT(*) FROM \(table)") ?? 0
+            }
+            return LegacySourceRevision(dataVersion: dataVersion, rowCounts: counts)
+        }
     }
 
     private static func readBounds(_ source: DatabaseQueue) throws -> LegacyBounds? {

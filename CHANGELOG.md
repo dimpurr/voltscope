@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Recheck the legacy SQLite source revision during import convergence so
+  timestamp rollback commits are rescanned before completion.
+- Limit CSV energy rows to the current metric version, matching chart totals.
 - Refresh process identity metadata when `pbi_comm` changes, and read each
   process's current parent PID on every sampling tick.
 - Persist partial history windows every 15 seconds and before sleep; retain failed

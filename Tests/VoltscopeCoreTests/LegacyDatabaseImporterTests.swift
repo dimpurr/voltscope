@@ -636,6 +636,42 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         withExtendedLifetime(walWriter) {}
     }
 
+    func testImportConvergesOnEarlierTimestampCommitWithoutChangingMaximum() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 3)
+        let walWriter = try makeWALWriter(at: legacyURL)
+        let base: Int64 = 1_700_000_000_000
+        let earlierTimestamp = base + 12 * 3_600_000 + 5_000
+        let history = try makeHistory()
+        let inserted = LockedFlag()
+        let fixedNow = legacyFixtureNow(days: 3)
+        let importer = LegacyDatabaseImporter(
+            history: history,
+            legacyURL: legacyURL,
+            timebase: LegacyTimebase(numer: 1, denom: 1),
+            now: { fixedNow },
+            progress: { progress in
+                guard progress.importedHours == 1, inserted.trySet() else { return }
+                try? walWriter.write { db in
+                    var sample = EnergySample(timestamp: earlierTimestamp, pid: 901,
+                                              bundleIdentifier: "com.test.rollback", processName: "Rollback",
+                                              path: nil, parentPid: nil, cpuUserNs: 1, cpuSystemNs: 0,
+                                              energyNJ: 9, wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0,
+                                              year: 2023, month: 11, day: 14, hour: 12, minute: 0)
+                    try sample.insert(db)
+                }
+            })
+
+        try await importer.run()
+        let imported = try await history.dbPool.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0 AND energyNJ=9") ?? 0
+        }
+        XCTAssertTrue(inserted.trySet() == false, "the late earlier-timestamp write hook must run")
+        XCTAssertEqual(imported, 1, "an earlier commit must be imported even when MAX(timestamp) is unchanged")
+        withExtendedLifetime(walWriter) {}
+    }
+
     func testSustainedCommitsBeyondRoundBudgetStayVerifying() async throws {
         let dir = try directory()
         let legacyURL = dir.appendingPathComponent("db.sqlite")

@@ -298,7 +298,7 @@ extension HistoryDatabase {
         }
     }
 
-    /// Raw process samples for CSV export. The caller supplies the desired raw-retention interval.
+    /// Current-version raw process samples for CSV export. The caller supplies the desired raw-retention interval.
     public func historySamplesForCSV(in interval: DateInterval) async throws -> [CSVSample] {
         var samples: [CSVSample] = []
         try await forEachHistorySamplesForCSV(in: interval) { batch in samples.append(contentsOf: batch) }
@@ -322,8 +322,9 @@ extension HistoryDatabase {
                 SELECT r.ts, r.pid, r.parentPid, a.bundleIdentifier, a.displayName AS processName, a.path,
                        r.cpuNs, r.energyNJ, r.wakeups, r.diskReadBytes, r.diskWriteBytes, r.metricVersion
                 FROM AppSampleRaw r JOIN App a ON a.id = r.appId
-                WHERE r.ts >= ? AND r.ts < ? ORDER BY r.ts, r.appId, r.pid
-                """, arguments: [start, end])
+                WHERE r.ts >= ? AND r.ts < ? AND r.metricVersion = ?
+                ORDER BY r.ts, r.appId, r.pid
+                """, arguments: [start, end, EnergyMetric.currentVersion])
             var batch: [CSVSample] = []
             batch.reserveCapacity(batchSize)
             while let row = try rows.next() {
