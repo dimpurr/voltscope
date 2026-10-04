@@ -3,6 +3,25 @@ import GRDB
 @testable import VoltscopeCore
 
 final class HistoryWriterTests: XCTestCase {
+    private final class SnapshotSequenceForHistoryWriter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [[ProcessSnapshot]]
+
+        init(_ values: [[ProcessSnapshot]]) { self.values = values }
+
+        func next() -> (snapshots: [ProcessSnapshot], unreadableCount: Int) {
+            lock.lock(); defer { lock.unlock() }
+            return (values.isEmpty ? [] : values.removeFirst(), 0)
+        }
+    }
+
+    private func processSnapshot(pid: Int32, start: UInt64, energy: UInt64) -> ProcessSnapshot {
+        ProcessSnapshot(pid: pid, parentPid: 1, bundleIdentifier: "bounded.coordinator",
+                        processName: "Queue", path: "/Queue", cpuUserNs: 0,
+                        cpuSystemNs: 0, energyTotal: energy, wakeupsTotal: 0,
+                        diskReadTotal: 0, diskWriteTotal: 0, procStartAbstime: start)
+    }
+
     private func epoch(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 0, _ minute: Int = 0) -> Int64 {
         var components = DateComponents()
         components.calendar = Calendar(identifier: .gregorian)
@@ -434,6 +453,85 @@ final class HistoryWriterTests: XCTestCase {
         }
         XCTAssertEqual(total, 46)
         XCTAssertEqual(count, 9)
+    }
+
+    func testRejectedProcessTickCanBeRecoveredFromCumulativeCounter() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let start = epoch(2026, 1, 2, 3, 4)
+        let sequence = SnapshotSequenceForHistoryWriter([
+            [processSnapshot(pid: 90, start: 1, energy: 100)],
+            [processSnapshot(pid: 90, start: 1, energy: 130)],
+            [processSnapshot(pid: 90, start: 1, energy: 140)]
+        ])
+        let sampler = ProcessSampler(energyAvailable: true, snapshotReader: { sequence.next() })
+        let coordinator = SamplingCoordinator(database: db, processSampler: sampler)
+        func tickDate(_ offset: Int64) -> Date {
+            Date(timeIntervalSince1970: Double(start + offset) / 1000)
+        }
+        _ = await coordinator.runProcessTick(emit: false, at: tickDate(0))
+
+        try await db.writeTick(timestamp: start,
+            apps: [SampledApp(groupKey: "bounded.coordinator", displayName: "Queue", pid: 91,
+                              energyNJ: 10, cpuNs: 10)], buckets: [],
+            coverage: SampleCoverage(visible: 1, unreadable: 0))
+        try await db.dbPool.write { conn in
+            try conn.execute(sql: """
+                CREATE TEMP TRIGGER fail_raw_insert BEFORE INSERT ON AppSampleRaw
+                BEGIN SELECT RAISE(FAIL, 'injected write failure'); END
+                """)
+        }
+        for window in 1...8 {
+            do {
+                try await db.writeTick(timestamp: start + Int64(window * 30_000),
+                    apps: [SampledApp(groupKey: "bounded.coordinator", displayName: "Queue", pid: 91,
+                                      energyNJ: 1, cpuNs: 1)], buckets: [],
+                    coverage: SampleCoverage(visible: 1, unreadable: 0))
+            } catch { }
+        }
+
+        _ = await coordinator.runProcessTick(emit: true, at: tickDate(270_000))
+        do {
+            try await db.writeTick(timestamp: start + 300_000,
+                apps: [SampledApp(groupKey: "bounded.coordinator", displayName: "Queue", pid: 92,
+                                  energyNJ: 1, cpuNs: 1)], buckets: [],
+                coverage: SampleCoverage(visible: 1, unreadable: 0))
+            XCTFail("The queue must still be full after the coordinator rejected the process tick")
+        } catch let error as HistoryWindowBufferError {
+            if case .pendingLimitReached = error { } else { XCTFail("Unexpected buffer error: \(error)") }
+        } catch {
+            XCTFail("Unexpected write error: \(error)")
+        }
+
+        try await db.dbPool.write { conn in try conn.execute(sql: "DROP TRIGGER fail_raw_insert") }
+        try await db.flushPendingWindow()
+        _ = await coordinator.runProcessTick(emit: true, at: tickDate(300_000))
+        try await db.flushPendingWindow()
+
+        let total = try await sum(db, sql: "SELECT SUM(energyNJ) FROM AppSampleRaw WHERE pid = 90")
+        XCTAssertEqual(total, 40, "the rejected 30 nJ delta must be replayed with the next 10 nJ delta")
+    }
+
+    func testMinuteRollupUsesRawTimestampRangeIndex() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let plans = try await db.dbPool.read { conn in
+            let appPlan = try Row.fetchAll(conn, sql: """
+                EXPLAIN QUERY PLAN
+                SELECT ts / 60000, appId, metricVersion, SUM(energyNJ)
+                FROM AppSampleRaw
+                WHERE ts >= 6060000 AND ts < 12000000 AND metricVersion <> 0
+                GROUP BY ts / 60000, appId, metricVersion
+                """).compactMap { $0["detail"] as String? }.joined(separator: " | ")
+            let bucketPlan = try Row.fetchAll(conn, sql: """
+                EXPLAIN QUERY PLAN
+                SELECT ts / 60000, bucketId, metricVersion, SUM(energyNJ)
+                FROM BucketSampleRaw
+                WHERE ts >= 6060000 AND ts < 12000000 AND metricVersion <> 0
+                GROUP BY ts / 60000, bucketId, metricVersion
+                """).compactMap { $0["detail"] as String? }.joined(separator: " | ")
+            return (appPlan, bucketPlan)
+        }
+        XCTAssertTrue(plans.0.contains("SEARCH AppSampleRaw USING INDEX AppSampleRaw_ts"), plans.0)
+        XCTAssertTrue(plans.1.contains("SEARCH BucketSampleRaw USING INDEX BucketSampleRaw_ts"), plans.1)
     }
 
     func testSleepEventFlushesPartialWindow() async throws {

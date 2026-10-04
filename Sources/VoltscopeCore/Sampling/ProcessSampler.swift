@@ -18,6 +18,14 @@ public struct ProcessSampleResult: Sendable {
     public let identitiesByPID: [Int32: AppIdentity.Resolved]
 }
 
+final class ProcessSamplingCheckpoint: @unchecked Sendable {
+    private let restoreState: () -> Void
+
+    init(restoreState: @escaping () -> Void) { self.restoreState = restoreState }
+
+    func restore() { restoreState() }
+}
+
 public struct ProcessSnapshot: Sendable, Equatable {
     public let pid: Int32
     public let parentPid: Int32?
@@ -142,6 +150,20 @@ public final class ProcessSampler: @unchecked Sendable {
     /// HAS_CPU_DPE_COUNTER); false on Intel where ri_energy_nj is always 0.
     /// Determined once at init by reading kern.pervasive_energy sysctl.
     public let energyAvailable: Bool
+
+    /// Captures the last committed counter baseline so a rejected database
+    /// tick can be replayed from cumulative counters on the next scan.
+    func makeCheckpoint() -> ProcessSamplingCheckpoint {
+        let state = queue.sync { (previous, missedScans, metadataCache) }
+        return ProcessSamplingCheckpoint { [weak self] in
+            guard let self else { return }
+            self.queue.sync {
+                self.previous = state.0
+                self.missedScans = state.1
+                self.metadataCache = state.2
+            }
+        }
+    }
 
     public init() {
         var value: Int32 = 0

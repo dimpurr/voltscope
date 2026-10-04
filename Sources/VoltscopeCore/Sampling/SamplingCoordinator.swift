@@ -122,8 +122,9 @@ public actor SamplingCoordinator {
     }
 
     @discardableResult
-    private func runProcessTick(emit: Bool) async -> Int {
-        let result = processSampler.sampleAll()
+    func runProcessTick(emit: Bool, at date: Date = Date()) async -> Int {
+        let checkpoint = emit ? processSampler.makeCheckpoint() : nil
+        let result = processSampler.sampleAll(at: date)
         latestProcessCoverage = ProcessCoverage(
             visibleCount: result.visibleCount,
             unreadableCount: result.unreadableCount
@@ -151,7 +152,7 @@ public actor SamplingCoordinator {
                 )
             }
             try await database.writeTick(
-                timestamp: result.samples.first?.timestamp ?? Int64(Date().timeIntervalSince1970 * 1000),
+                timestamp: result.samples.first?.timestamp ?? Int64(date.timeIntervalSince1970 * 1000),
                 apps: apps,
                 buckets: [],
                 coverage: SampleCoverage(visible: Int64(result.visibleCount), unreadable: Int64(result.unreadableCount)),
@@ -159,6 +160,11 @@ public actor SamplingCoordinator {
                 energyUnavailable: !processEnergyAvailable
             )
         } catch {
+            if let checkpoint,
+               let bufferError = error as? HistoryWindowBufferError,
+               case .pendingLimitReached = bufferError {
+                checkpoint.restore()
+            }
             logError("History tick insert failed: \(error)")
         }
         return result.samples.count

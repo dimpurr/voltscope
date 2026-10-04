@@ -10,6 +10,9 @@
   finer-grained rows expire, avoiding out-of-range energy in the result.
 - Recheck process start time after identity lookup and discard snapshots if a
   PID was reused during the read.
+- Preserve process counter deltas when a full history write queue rejects a
+  sampling tick, and restrict rollups to indexed timestamp ranges after their
+  watermarks.
 
 ## 0.10.1 — 2026-10-04
 
