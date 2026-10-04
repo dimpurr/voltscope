@@ -113,7 +113,8 @@ for new samples.
 - `Meta` stores rollup watermarks, migration state and cursor, and
   `settings.rawRetentionDays`. It also stores safe wall-clock and
   sleep-inclusive continuous-clock anchors so a forward wall-clock jump cannot
-  prematurely prune history.
+  prematurely prune history, advance legacy raw cutoffs, or expire a retained
+  legacy source.
 
 The current schema has thirteen tables: eleven tiered tables (`App`,
 `AppSampleRaw`, `AppUsageMinute`, `AppUsageHour`, `Bucket`, `BucketSampleRaw`,
@@ -183,7 +184,13 @@ as a background task. It reads the source in read-only, hour-sized transactions
 and records a resumable cursor. Before marking migration complete, it verifies
 energy and battery counts and checks both the newest source timestamp and the
 SQLite source revision; a changed source revision restarts the hour scan so
-commits with earlier timestamps are included. Convergence is bounded to ten
+commits with earlier timestamps are included. The revision is recorded with
+the completion marker and checked again when a completed source is found at
+launch, covering commits that land between the final check and that marker.
+Legacy raw import and verification cutoffs use the same persisted,
+sleep-inclusive safe clock as history pruning. The seven-day source deletion
+deadline and its expiry check use that clock as well, so a forward wall-clock
+jump cannot discard retained recovery data early. Convergence is bounded to ten
 rounds per launch; if the source keeps changing, migration remains `verifying`
 with a resumable cursor for the next launch. A completed import records the raw
 verification cutoff. Older completed records without that cutoff still verify

@@ -8,7 +8,7 @@ private let continuousClockTimebase: mach_timebase_info_data_t = {
     return timebase
 }()
 
-private func continuousClockSeconds() -> TimeInterval {
+func continuousClockSeconds() -> TimeInterval {
     let nanoseconds = Double(mach_continuous_time())
         * Double(continuousClockTimebase.numer) / Double(continuousClockTimebase.denom)
     return nanoseconds / 1_000_000_000
@@ -449,29 +449,7 @@ public extension HistoryDatabase {
         let nowMS = Int64(now.timeIntervalSince1970 * 1000)
         let monotonicMS = Int64((monotonicNow ?? continuousClockSeconds()) * 1000)
         try await dbPool.write { db in
-            let previousSafeMS = try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key = 'retention.safeWallClockMS'")
-            let previousMonotonicMS = try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key = 'retention.safeMonotonicMS'")
-            let safeNowMS: Int64
-            if let previousSafeMS, let previousMonotonicMS {
-                if monotonicMS >= previousMonotonicMS {
-                    let elapsed = monotonicMS - previousMonotonicMS
-                    safeNowMS = min(nowMS, previousSafeMS + elapsed)
-                } else if let latestHistoryMS = try Self.latestHistoryTimestampMS(db) {
-                    // A reboot resets the continuous clock. Re-anchor from
-                    // stored history so downtime is not mistaken for elapsed
-                    // monotonic time and a wall-clock jump cannot prune ahead.
-                    safeNowMS = min(nowMS, latestHistoryMS + 5 * 60_000)
-                } else {
-                    safeNowMS = min(nowMS, previousSafeMS)
-                }
-            } else if let latestHistoryMS = try Self.latestHistoryTimestampMS(db) {
-                // Establish a conservative anchor on upgrades and after an
-                // unrecorded clock jump. Subsequent runs advance by the
-                // sleep-inclusive continuous clock.
-                safeNowMS = min(nowMS, latestHistoryMS + 5 * 60_000)
-            } else {
-                safeNowMS = nowMS
-            }
+            let safeNowMS = try Self.advanceSafeClock(db, nowMS: nowMS, monotonicMS: monotonicMS)
             let retention = try Int.fetchOne(
                 db,
                 sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key = 'settings.rawRetentionDays'"
@@ -483,9 +461,48 @@ public extension HistoryDatabase {
             try db.execute(sql: "DELETE FROM Coverage WHERE ts < ?", arguments: [rawCutoff])
             try db.execute(sql: "DELETE FROM AppUsageMinute WHERE minute < ?", arguments: [minuteCutoff])
             try db.execute(sql: "DELETE FROM BucketMinute WHERE minute < ?", arguments: [minuteCutoff])
-            try Self.setWatermark(db, key: "retention.safeWallClockMS", value: safeNowMS)
-            try Self.setWatermark(db, key: "retention.safeMonotonicMS", value: monotonicMS)
         }
+    }
+
+    /// Advances the persisted safe wall clock using the same sleep-inclusive
+    /// continuous-clock anchor for pruning and legacy database lifecycle work.
+    func safeNow(now: Date = Date(), monotonicNow: TimeInterval? = nil,
+                 fallbackLatestHistoryMS: Int64? = nil) async throws -> Int64 {
+        let nowMS = Int64(now.timeIntervalSince1970 * 1000)
+        let monotonicMS = Int64((monotonicNow ?? continuousClockSeconds()) * 1000)
+        return try await dbPool.write { db in
+            try Self.advanceSafeClock(db, nowMS: nowMS, monotonicMS: monotonicMS,
+                                      fallbackLatestHistoryMS: fallbackLatestHistoryMS)
+        }
+    }
+
+    private static func advanceSafeClock(_ db: Database, nowMS: Int64, monotonicMS: Int64,
+                                         fallbackLatestHistoryMS: Int64? = nil) throws -> Int64 {
+        let previousSafeMS = try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key = 'retention.safeWallClockMS'")
+        let previousMonotonicMS = try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key = 'retention.safeMonotonicMS'")
+        let latestHistoryMS = try Self.latestHistoryTimestampMS(db) ?? fallbackLatestHistoryMS
+        let safeNowMS: Int64
+        if let previousSafeMS, let previousMonotonicMS {
+            if monotonicMS >= previousMonotonicMS {
+                let elapsed = monotonicMS - previousMonotonicMS
+                safeNowMS = min(nowMS, previousSafeMS + elapsed)
+            } else if let latestHistoryMS {
+                // A reboot resets the continuous clock. Re-anchor from stored
+                // history so a wall-clock jump cannot advance retention.
+                safeNowMS = min(nowMS, latestHistoryMS + 5 * 60_000)
+            } else {
+                safeNowMS = min(nowMS, previousSafeMS)
+            }
+        } else if let latestHistoryMS {
+            // Establish a conservative anchor on upgrades or before the first
+            // import has populated history.
+            safeNowMS = min(nowMS, latestHistoryMS + 5 * 60_000)
+        } else {
+            safeNowMS = nowMS
+        }
+        try Self.setWatermark(db, key: "retention.safeWallClockMS", value: safeNowMS)
+        try Self.setWatermark(db, key: "retention.safeMonotonicMS", value: monotonicMS)
+        return safeNowMS
     }
 
     private static func latestHistoryTimestampMS(_ db: Database) throws -> Int64? {

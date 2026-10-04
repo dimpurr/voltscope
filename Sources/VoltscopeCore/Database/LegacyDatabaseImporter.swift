@@ -141,16 +141,19 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
     private let batteryCopyProgress: (@Sendable (Int) -> Void)?
     private let runLock = LegacyImportRunLock()
     private let now: @Sendable () -> Date
+    private let monotonicNow: @Sendable () -> TimeInterval
 
     public convenience init(
         history: HistoryDatabase,
         legacyURL: URL,
         timebase: LegacyTimebase = .system,
         now: @escaping @Sendable () -> Date = Date.init,
+        monotonicNow: (@Sendable () -> TimeInterval)? = nil,
         rawRetentionDays: Int = 7,
         progress: (@Sendable (LegacyImportProgress) -> Void)? = nil
     ) {
         self.init(history: history, legacyURL: legacyURL, timebase: timebase, now: now,
+                  monotonicNow: monotonicNow,
                   rawRetentionDays: rawRetentionDays, progress: progress, batteryCopyProgress: nil)
     }
 
@@ -159,6 +162,7 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         legacyURL: URL,
         timebase: LegacyTimebase = .system,
         now: @escaping @Sendable () -> Date = Date.init,
+        monotonicNow: (@Sendable () -> TimeInterval)? = nil,
         rawRetentionDays: Int = 7,
         progress: (@Sendable (LegacyImportProgress) -> Void)? = nil,
         batteryCopyProgress: (@Sendable (Int) -> Void)?
@@ -170,12 +174,32 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         self.progressHandler = progress
         self.batteryCopyProgress = batteryCopyProgress
         self.now = now
+        self.monotonicNow = monotonicNow ?? continuousClockSeconds
     }
 
     /// Starts import work independently of the caller's executor.
     @discardableResult
     public func start() -> Task<Void, Error> {
         Task.detached(priority: .utility) { try await self.run() }
+    }
+
+    /// Returns whether a completed import's source revision changed after its
+    /// completion marker was committed.
+    func completedSourceRevisionChanged() async throws -> Bool {
+        guard FileManager.default.fileExists(atPath: legacyURL.path) else { return false }
+        var configuration = Configuration()
+        configuration.readonly = true
+        configuration.busyMode = .timeout(5.0)
+        let source = try DatabaseQueue(path: legacyURL.path, configuration: configuration)
+        let current = try Self.readSourceRevision(source)
+        let savedDataVersion = try await history.dbPool.read { db in
+            try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key='legacy.sourceRevision.dataVersion'")
+        }
+        let savedCounts = try await history.dbPool.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.sourceRevision.rowCounts'")
+        }
+        return savedDataVersion != current.dataVersion
+            || savedCounts != current.rowCounts.map(String.init).joined(separator: ",")
     }
 
     /// Imports hour by hour. The cursor update commits with each hour's rows,
@@ -240,8 +264,23 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
                 throw LegacyImportError.emptyLegacyEnergyHistory
             }
             if savedState == LegacyImportState.done.rawValue {
-                try await verifyCompletedImport(source: source, bounds: initialBounds)
-                return
+                let currentRevision = try Self.readSourceRevision(source)
+                let savedDataVersion = try await meta("legacy.sourceRevision.dataVersion").flatMap(Int64.init)
+                let savedCounts = try await meta("legacy.sourceRevision.rowCounts")
+                let currentCounts = currentRevision.rowCounts.map(String.init).joined(separator: ",")
+                if savedDataVersion == currentRevision.dataVersion, savedCounts == currentCounts {
+                    try await verifyCompletedImport(source: source, bounds: initialBounds)
+                    return
+                }
+                // A source commit can land after the final convergence check
+                // but before the destination done marker. Reopen the import
+                // and rescan from the first source hour on the next entry.
+                try await history.dbPool.write { db in
+                    try Self.putMeta(db, key: "legacy.state", value: LegacyImportState.importing.rawValue)
+                    try db.execute(sql: "DELETE FROM Meta WHERE key IN ('legacy.doneAt', 'legacy.deleteAfter', 'legacy.verifiedAt')")
+                    try Self.putMeta(db, key: "legacy.cursorHour", value: String(initialBounds.minHour - 1))
+                }
+                wasDone = false
             }
             if savedState == nil || savedState == LegacyImportState.none.rawValue || savedState == LegacyImportState.failed.rawValue {
                 try await setMeta("legacy.state", value: LegacyImportState.pending.rawValue)
@@ -281,8 +320,9 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         let anchor = try await meta("legacy.windowAnchor").flatMap(Int64.init) ?? bounds.latestTimestamp
         let storedCutoff = try await meta("legacy.rawCutoff").flatMap(Int64.init)
         let anchoredCutoff = Self.windowStart(anchor - Int64(rawRetentionDays) * 86_400_000)
-        let currentCutoff = Self.windowStart(Int64(now().timeIntervalSince1970 * 1000)
-            - Int64(rawRetentionDays) * 86_400_000)
+        let safeNowMS = try await history.safeNow(now: now(), monotonicNow: monotonicNow(),
+                                                  fallbackLatestHistoryMS: bounds.latestTimestamp)
+        let currentCutoff = Self.windowStart(safeNowMS - Int64(rawRetentionDays) * 86_400_000)
         let rawCutoff = max(storedCutoff ?? anchoredCutoff, currentCutoff)
         let upperBound = bounds.latestTimestamp &+ 1
         let totals = try Self.sourceRead(source) { src in
@@ -316,8 +356,9 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
             }
             let minuteCutoff = (anchor! - 2 * 86_400_000) / 60_000 * 60_000
             let anchoredRawCutoff = Self.windowStart(anchor! - Int64(rawRetentionDays) * 86_400_000)
-            let maintenanceRawCutoff = Self.windowStart(Int64(now().timeIntervalSince1970 * 1000)
-                - Int64(rawRetentionDays) * 86_400_000)
+            let safeNowMS = try await history.safeNow(now: now(), monotonicNow: monotonicNow(),
+                                                      fallbackLatestHistoryMS: bounds.latestTimestamp)
+            let maintenanceRawCutoff = Self.windowStart(safeNowMS - Int64(rawRetentionDays) * 86_400_000)
             let rawCutoff = max(anchoredRawCutoff, maintenanceRawCutoff)
             // Every source read for this pass is bounded by the snapshot so
             // the destination can be verified against exactly what was read.
@@ -365,8 +406,10 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
             try await history.dbPool.write { db in
                 try Self.copyBatteryAndEvents(source: source, db: db, upperBound: snapshotUpper, progress: self.batteryCopyProgress)
             }
+            let verificationSafeNowMS = try await history.safeNow(
+                now: now(), monotonicNow: monotonicNow(), fallbackLatestHistoryMS: bounds.latestTimestamp)
             let verificationRawCutoff = max(anchoredRawCutoff, Self.windowStart(
-                Int64(now().timeIntervalSince1970 * 1000) - Int64(rawRetentionDays) * 86_400_000))
+                verificationSafeNowMS - Int64(rawRetentionDays) * 86_400_000))
             let oldTotals = try Self.sourceRead(source) { src in
                 try Self.readVerificationTotals(src, rawCutoff: verificationRawCutoff, upperBound: snapshotUpper)
             }
@@ -404,11 +447,15 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         let newest = try Self.readLatestTimestamp(source)
         let revisionUnchanged = try Self.readSourceRevision(source) == sourceRevision
         if (newest == nil || newest! <= bounds.latestTimestamp), revisionUnchanged {
-            let doneAt = Int64(now().timeIntervalSince1970 * 1000)
+            let doneAt = try await history.safeNow(now: now(), monotonicNow: monotonicNow(),
+                                                   fallbackLatestHistoryMS: bounds.latestTimestamp)
             try await history.dbPool.write { db in
                 try Self.putMeta(db, key: "legacy.rawCutoff", value: String(rawCutoff))
                 try Self.putMeta(db, key: "legacy.doneAt", value: String(doneAt))
                 try Self.putMeta(db, key: "legacy.deleteAfter", value: String(doneAt + 7 * 86_400_000))
+                try Self.putMeta(db, key: "legacy.sourceRevision.dataVersion", value: String(sourceRevision.dataVersion))
+                try Self.putMeta(db, key: "legacy.sourceRevision.rowCounts",
+                                 value: sourceRevision.rowCounts.map(String.init).joined(separator: ","))
                 try Self.putMeta(db, key: "legacy.state", value: LegacyImportState.done.rawValue)
                 try db.execute(sql: "DELETE FROM Meta WHERE key = 'legacy.error'")
             }
@@ -772,20 +819,24 @@ public extension HistoryDatabase {
         progress: (@Sendable (LegacyImportProgress) -> Void)? = nil
     ) async throws -> Task<Void, Error>? {
         guard FileManager.default.fileExists(atPath: legacyURL.path) else { return nil }
-        guard try await importStatus().state != .done else { return nil }
-        return LegacyDatabaseImporter(history: self, legacyURL: legacyURL,
-                                      rawRetentionDays: rawRetentionDays, progress: progress).start()
+        let importer = LegacyDatabaseImporter(history: self, legacyURL: legacyURL,
+                                              rawRetentionDays: rawRetentionDays, progress: progress)
+        if try await importStatus().state == .done,
+           !(try await importer.completedSourceRevisionChanged()) { return nil }
+        return importer.start()
     }
 
     func deleteLegacyDatabaseImmediately(at legacyURL: URL) async throws {
         try await deleteLegacyDatabase(at: legacyURL, requireExpiry: false)
     }
 
-    func deleteLegacyDatabaseIfExpired(at legacyURL: URL, now: Date = Date()) async throws -> Bool {
+    func deleteLegacyDatabaseIfExpired(at legacyURL: URL, now: Date = Date(),
+                                       monotonicNow: TimeInterval? = nil) async throws -> Bool {
         guard let deleteAfter = try await dbPool.read({ db in try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key='legacy.deleteAfter'") }) else {
             return false
         }
-        guard Int64(now.timeIntervalSince1970 * 1000) >= deleteAfter else { return false }
+        let safeNowMS = try await safeNow(now: now, monotonicNow: monotonicNow)
+        guard safeNowMS >= deleteAfter else { return false }
         // Revalidate while the source still exists. A post-import corruption
         // or destination loss must leave the only recovery copy untouched.
         let state = try await importStatus().state
@@ -804,17 +855,20 @@ public extension HistoryDatabase {
                                arguments: [String(Int64(now.timeIntervalSince1970 * 1000))])
             }
         }
-        try await deleteLegacyDatabase(at: legacyURL, requireExpiry: true, now: now)
+        try await deleteLegacyDatabase(at: legacyURL, requireExpiry: true, now: now,
+                                       monotonicNow: monotonicNow)
         return true
     }
 
-    private func deleteLegacyDatabase(at legacyURL: URL, requireExpiry: Bool, now: Date = Date()) async throws {
+    private func deleteLegacyDatabase(at legacyURL: URL, requireExpiry: Bool, now: Date = Date(),
+                                      monotonicNow: TimeInterval? = nil) async throws {
         let stateValue = try await dbPool.read { db in try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'") }
         let state = LegacyImportState(rawValue: stateValue ?? "none") ?? .none
         guard state == .done else { throw LegacyImportError.deletionNotAllowed(state) }
         if requireExpiry {
             let expiry = try await dbPool.read { db in try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key='legacy.deleteAfter'") }
-            guard let expiry, Int64(now.timeIntervalSince1970 * 1000) >= expiry else { return }
+            let safeNowMS = try await safeNow(now: now, monotonicNow: monotonicNow)
+            guard let expiry, safeNowMS >= expiry else { return }
         }
         let fm = FileManager.default
         for suffix in ["", "-wal", "-shm"] {

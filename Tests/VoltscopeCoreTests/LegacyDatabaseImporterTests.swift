@@ -59,11 +59,23 @@ private final class LockedFlag: @unchecked Sendable {
     }
 }
 
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func increment() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        value += 1
+        return value
+    }
+}
+
 private final class ImportTestClock: @unchecked Sendable {
     private let lock = NSLock()
     private var value: Date
+    private var monotonic: TimeInterval
 
-    init(_ value: Date) { self.value = value }
+    init(_ value: Date) { self.value = value; self.monotonic = continuousClockSeconds() }
 
     func now() -> Date {
         lock.lock(); defer { lock.unlock() }
@@ -71,7 +83,12 @@ private final class ImportTestClock: @unchecked Sendable {
     }
 
     func advance(by interval: TimeInterval) {
-        lock.lock(); value.addTimeInterval(interval); lock.unlock()
+        lock.lock(); value.addTimeInterval(interval); monotonic += interval; lock.unlock()
+    }
+
+    func monotonicNow() -> TimeInterval {
+        lock.lock(); defer { lock.unlock() }
+        return monotonic
     }
 }
 
@@ -100,7 +117,7 @@ private final class MaintenanceDuringBatteryCopy: @unchecked Sendable {
         maintenanceFinished.enter()
         Task.detached { [history, clock] in
             do {
-                try await history.runMaintenance(now: clock.now())
+                try await history.runMaintenance(now: clock.now(), monotonicNow: clock.monotonicNow())
             } catch {
                 self.recordMaintenanceError(error)
             }
@@ -392,7 +409,7 @@ final class LegacyDatabaseImporterTests: XCTestCase {
             (try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0"),
              try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppUsageMinute WHERE metricVersion=0"))
         }
-        XCTAssertEqual(resumedCounts.0, 2, "rows committed before the retention window moved remain until maintenance prunes them")
+        XCTAssertEqual(resumedCounts.0, 6, "a wall-clock jump alone must not age raw rows past the safe retention window")
         XCTAssertEqual(resumedCounts.1, 6)
     }
 
@@ -759,6 +776,95 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         withExtendedLifetime(walWriter) {}
     }
 
+    func testForwardWallClockJumpDoesNotSkipRetainedLegacyRawOnImportOrRevalidation() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        let history = try makeHistory()
+        let restoredClock = legacyFixtureNow(days: 1)
+        let jumpedClock = restoredClock.addingTimeInterval(20 * 86_400)
+
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                         timebase: LegacyTimebase(numer: 1, denom: 1),
+                                         now: { jumpedClock }, rawRetentionDays: 7).run()
+        let importedRawCount = try await history.dbPool.read { db in
+            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0") ?? 0
+        }
+        XCTAssertGreaterThan(importedRawCount, 0,
+                             "a forward wall-clock jump must not discard source rows still within the safe retention window")
+
+        try await history.dbPool.write { db in
+            try db.execute(sql: "DELETE FROM AppSampleRaw WHERE metricVersion=0")
+        }
+        do {
+            try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                             timebase: LegacyTimebase(numer: 1, denom: 1),
+                                             now: { restoredClock }, rawRetentionDays: 7).run()
+            XCTFail("completed-import revalidation must detect missing retained raw rows after the wall clock is restored")
+        } catch let error as LegacyImportError {
+            guard case .verificationFailed = error else { return XCTFail("unexpected error: \(error)") }
+        }
+    }
+
+    func testCommitAfterFinalRevisionCheckIsDiscoveredByCompletedImportEntry() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        let sourceWriter = try makeWALWriter(at: legacyURL)
+        let late = LegacyLateWriter(writer: sourceWriter, base: 1_700_000_000_000 + 12 * 3_600_000)
+        let history = try makeHistory()
+        let clockCalls = LockedFlag()
+        let nowCallCount = LockedCounter()
+        let fixtureNow = legacyFixtureNow(days: 1)
+        let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                              timebase: LegacyTimebase(numer: 1, denom: 1),
+                                              now: {
+            let call = nowCallCount.increment()
+            if call == 4, clockCalls.trySet() { late.commitClockRollback(energyNJ: 9) }
+            return fixtureNow
+        })
+
+        try await importer.run()
+        XCTAssertTrue(clockCalls.trySet() == false, "the late source commit hook must run after the final revision read")
+        let missedBeforeRecovery = try await history.dbPool.read { db in
+            try Int64.fetchOne(db, sql: "SELECT SUM(energyNJ) FROM AppUsageHour WHERE metricVersion=0") ?? 0
+        }
+        XCTAssertEqual(missedBeforeRecovery, 203)
+
+        let recovery = try await history.startLegacyImportIfNeeded(at: legacyURL)
+        XCTAssertNotNil(recovery, "a completed marker with a newer source revision must restart convergence")
+        try await recovery?.value
+        let recovered = try await history.dbPool.read { db in
+            (try Int64.fetchOne(db, sql: "SELECT SUM(energyNJ) FROM AppUsageHour WHERE metricVersion=0") ?? 0,
+             try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'"))
+        }
+        XCTAssertEqual(recovered.0, 212)
+        XCTAssertEqual(recovered.1, "done")
+        XCTAssertNil(late.lastError)
+        withExtendedLifetime(sourceWriter) {}
+    }
+
+    func testForwardWallClockJumpDoesNotExpireLegacySourceEarly() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        let history = try makeHistory()
+        let doneAt = legacyFixtureNow(days: 1)
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                         timebase: LegacyTimebase(numer: 1, denom: 1),
+                                         now: { doneAt }).run()
+
+        let monotonicAnchor = try await history.dbPool.read { db in
+            try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key='retention.safeMonotonicMS'") ?? 0
+        }
+        let deleted = try await history.deleteLegacyDatabaseIfExpired(
+            at: legacyURL, now: doneAt.addingTimeInterval(8 * 86_400),
+            monotonicNow: Double(monotonicAnchor) / 1000)
+
+        XCTAssertFalse(deleted, "expiry must use the sleep-inclusive safe clock and not a wall-clock jump")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyURL.path))
+    }
+
     func testCurrentVersionSamplesWrittenAfterImportRemainVisibleInEveryRange() async throws {
         let dir = try directory()
         let legacyURL = dir.appendingPathComponent("db.sqlite")
@@ -1051,7 +1157,8 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         let box = ImportTaskBox()
         let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
                                               timebase: LegacyTimebase(numer: 1, denom: 1),
-                                              now: { clock.now() }, rawRetentionDays: 7,
+                                              now: { clock.now() }, monotonicNow: { clock.monotonicNow() },
+                                              rawRetentionDays: 7,
                                               progress: { progress in
             if progress.importedHours == progress.totalHours { box.cancel() }
         })
@@ -1065,7 +1172,7 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         }
 
         clock.advance(by: 3 * 60 * 60)
-        try await history.runMaintenance(now: clock.now())
+        try await history.runMaintenance(now: clock.now(), monotonicNow: clock.monotonicNow())
         let retainedAfterMaintenance = try await history.dbPool.read { db in
             try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE metricVersion=0") ?? 0
         }
@@ -1079,7 +1186,8 @@ final class LegacyDatabaseImporterTests: XCTestCase {
 
         try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
                                          timebase: LegacyTimebase(numer: 1, denom: 1),
-                                         now: { clock.now() }, rawRetentionDays: 7).run()
+                                         now: { clock.now() }, monotonicNow: { clock.monotonicNow() },
+                                         rawRetentionDays: 7).run()
         let result = try await history.dbPool.read { db in
             (try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'") ?? "",
              try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.error'"))
@@ -1098,7 +1206,8 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         let maintenance = MaintenanceDuringBatteryCopy(history: history, clock: clock)
         let importer = LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
                                               timebase: LegacyTimebase(numer: 1, denom: 1),
-                                              now: { maintenance.nowAfterBatteryCopy() }, rawRetentionDays: 7,
+                                              now: { maintenance.nowAfterBatteryCopy() },
+                                              monotonicNow: { clock.monotonicNow() }, rawRetentionDays: 7,
                                               batteryCopyProgress: maintenance.batteryCopyProgress)
 
         try await importer.start().value
@@ -1431,7 +1540,11 @@ final class LegacyDatabaseImporterTests: XCTestCase {
 
         try await history.setRawRetentionDays(30)
         let expiry = doneAt.addingTimeInterval(7 * 86_400)
-        let deleted = try await history.deleteLegacyDatabaseIfExpired(at: legacyURL, now: expiry)
+        let monotonicAnchor = try await history.dbPool.read { db in
+            try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key='retention.safeMonotonicMS'") ?? 0
+        }
+        let deleted = try await history.deleteLegacyDatabaseIfExpired(
+            at: legacyURL, now: expiry, monotonicNow: Double(monotonicAnchor + 7 * 86_400_000) / 1000)
         XCTAssertTrue(deleted)
         let status = try await history.importStatus()
         XCTAssertEqual(status.state, .done)
@@ -1457,7 +1570,11 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         try await history.setRawRetentionDays(30)
 
         let expiry = doneAt.addingTimeInterval(7 * 86_400)
-        let deleted = try await history.deleteLegacyDatabaseIfExpired(at: legacyURL, now: expiry)
+        let monotonicAnchor = try await history.dbPool.read { db in
+            try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key='retention.safeMonotonicMS'") ?? 0
+        }
+        let deleted = try await history.deleteLegacyDatabaseIfExpired(
+            at: legacyURL, now: expiry, monotonicNow: Double(monotonicAnchor + 7 * 86_400_000) / 1000)
 
         XCTAssertTrue(deleted)
         let status = try await history.importStatus()
@@ -1639,7 +1756,7 @@ final class LegacyDatabaseImporterTests: XCTestCase {
             let tables = ["App", "AppUsageMinute", "AppUsageHour", "AppSampleRaw", "Bucket", "BucketMinute", "BucketHour", "BucketSampleRaw", "BatteryStatus", "PowerEvents"]
             return try tables.map { table in
                 let rows = try Row.fetchAll(db, sql: "SELECT * FROM \(table) ORDER BY 1")
-                return "\(table):" + rows.map { String(describing: $0) }.joined(separator: "|")
+                return "\(table):" + rows.map { String(describing: $0) }.sorted().joined(separator: "|")
             }.joined(separator: "\n")
         }
     }
