@@ -342,8 +342,8 @@ This section supersedes all earlier History layout, chart, removal and legend ru
 - CSV exports raw process rows within the selected range and available raw
   retention window. Window formation and query-tier details are owned by
   [HLD](HLD.md#tiered-history-tables-current). The ordered public columns are
-  `timestamp_ms`, `iso8601`, `pid`, `parent_pid`, `bundle_id`, `process_name`,
-  `path`, `cpu_ns`, `energy_nj`, `wakeups`, `disk_read_bytes`,
+  `timestamp_ms`, `iso8601`, `pid`, `parent_pid`, `bundle_id`, `app_name`,
+  `app_path`, `cpu_ns`, `energy_nj`, `wakeups`, `disk_read_bytes`,
   `disk_write_bytes`, and `metric_version`.
 - The original v0.6.2 full-width chart plus equal bottom columns are preserved. Hardware measurements remain in the left Energy breakdown column and are independent of App CPU totals.
 - History is a normal Dock-visible document while its window is open. Closing
