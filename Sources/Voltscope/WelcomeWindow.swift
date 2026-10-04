@@ -166,6 +166,7 @@ private struct WelcomeWindow: View {
                 }
                 .keyboardShortcut(.cancelAction)
                 .accessibilityLabel("Not Now")
+                .accessibilityIdentifier(AccessibilityIdentifiers.welcomeNotNow)
 
                 Spacer()
 
@@ -175,12 +176,14 @@ private struct WelcomeWindow: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .accessibilityLabel("Done")
+                    .accessibilityIdentifier(AccessibilityIdentifiers.welcomeDone)
                 } else if appState.loginItemStatus == .requiresApproval {
                     Button("Open Login Items") {
                         onOpenLoginItems()
                     }
                     .buttonStyle(.borderedProminent)
                     .accessibilityLabel("Open Login Items")
+                    .accessibilityIdentifier(AccessibilityIdentifiers.welcomeOpenLoginItems)
                 } else {
                     Button("Enable at Login") {
                         appState.setLaunchAtLogin(true)
@@ -189,6 +192,7 @@ private struct WelcomeWindow: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(!appState.canEnableLaunchAtLogin)
                     .accessibilityLabel("Enable at Login")
+                    .accessibilityIdentifier(AccessibilityIdentifiers.welcomeEnableAtLogin)
                 }
             }
         }

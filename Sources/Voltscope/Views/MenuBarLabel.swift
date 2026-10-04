@@ -9,6 +9,19 @@ struct MenuBarLabel: View {
             Image(systemName: "bolt.fill")
             Text(displayString)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Voltscope")
+        .accessibilityValue(accessibilityValue)
+        .accessibilityIdentifier(AccessibilityIdentifiers.menuBarItem)
+    }
+
+    private var accessibilityValue: String {
+        let battery = appState.lastBattery
+        return AccessibilityLabels.menuBarBatteryValue(
+            levelPercent: battery?.levelPercent,
+            isCharging: battery?.isCharging ?? false,
+            isACPlugged: battery?.isACPlugged ?? false
+        )
     }
 
     private var displayString: String {

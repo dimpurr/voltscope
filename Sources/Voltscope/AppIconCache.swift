@@ -32,16 +32,19 @@ struct AppIconView: View {
     var size: CGFloat = 16
 
     var body: some View {
-        if let icon = AppIconCache.shared.icon(forPath: path, bundleId: bundleId) {
-            Image(nsImage: icon)
-                .resizable()
-                .interpolation(.high)
-                .frame(width: size, height: size)
-        } else {
-            Image(systemName: "app.dashed")
-                .resizable()
-                .frame(width: size, height: size)
-                .foregroundStyle(.tertiary)
+        Group {
+            if let icon = AppIconCache.shared.icon(forPath: path, bundleId: bundleId) {
+                Image(nsImage: icon)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: size, height: size)
+            } else {
+                Image(systemName: "app.dashed")
+                    .resizable()
+                    .frame(width: size, height: size)
+                    .foregroundStyle(.tertiary)
+            }
         }
+        .accessibilityHidden(true)
     }
 }

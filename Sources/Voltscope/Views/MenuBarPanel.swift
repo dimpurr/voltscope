@@ -5,6 +5,7 @@ import VoltscopeCore
 struct MenuBarPanel: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var systemExpanded = false
 
     var body: some View {
@@ -15,6 +16,10 @@ struct MenuBarPanel: View {
         .padding(14)
         .frame(width: 340, alignment: .top)
         .frame(minHeight: 428, alignment: .top)
+        .onExitCommand {
+            NSApp.keyWindow?.orderOut(nil)
+            NSApp.deactivate()
+        }
     }
 
     @ViewBuilder
@@ -130,6 +135,7 @@ struct MenuBarPanel: View {
                     .accessibilityLabel("Battery health \(healthPercentAccessibilityValue)")
             }
             HealthBar(healthRatio: healthRatio ?? 0)
+                .accessibilityHidden(true)
             HStack(spacing: 16) {
                 LabeledMetric(label: "Cycles", value: cycleText)
                 LabeledMetric(label: "Condition", value: conditionText)
@@ -197,6 +203,7 @@ struct MenuBarPanel: View {
             Text(appState.processEnergyAvailable ? "Top energy use (last 30 min)" : "Top CPU time (last 30 min)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .accessibilityLabel(appState.processEnergyAvailable ? "Top CPU energy use (last 30 min)" : "Top CPU time (last 30 min)")
             if !appState.processEnergyAvailable {
                 Text("Intel Mac computers do not provide per-process energy data.")
                     .font(.caption2).foregroundStyle(.tertiary)
@@ -220,14 +227,21 @@ struct MenuBarPanel: View {
     private func appRow(_ row: HistoryDatabase.TopAppEnergy, topMax: Int64) -> some View {
         HStack(spacing: 8) {
             AppIconView(path: row.path, bundleId: row.bundleIdentifier, size: 16)
+                .accessibilityHidden(true)
             Text(row.processName)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
-            if !appState.processEnergyAvailable { Text(String(format: "%.1fs", Double(row.totalCPUNS) / 1e9)).font(.caption.monospacedDigit()).foregroundStyle(.secondary) }
+            if !appState.processEnergyAvailable {
+                Text(String(format: "%.1fs", Double(row.totalCPUNS) / 1e9))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
             IntensityDots(filled: IntensityDots.dotCount(value: MenuBarMetricPresentation.value(
                 energyNJ: row.totalEnergyNJ, cpuNS: row.totalCPUNS,
                 energyAvailable: appState.processEnergyAvailable), max: topMax))
+                .accessibilityHidden(true)
             Button {
                 openWindow(id: "history")
                 NSApp.activate(ignoringOtherApps: true)
@@ -241,6 +255,17 @@ struct MenuBarPanel: View {
             .accessibilityIdentifier(AccessibilityIdentifiers.menuOpenAppInHistory(appIdentity: row.id))
         }
         .help(rowTooltip(row))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(row.processName)
+        .accessibilityValue(AccessibilityLabels.menuBarAppRowValue(
+            energyNJ: row.totalEnergyNJ,
+            cpuNS: row.totalCPUNS,
+            energyAvailable: appState.processEnergyAvailable
+        ))
+        .accessibilityAction(named: AccessibilityLabels.openHistoryFromApp(name: row.processName)) {
+            openWindow(id: "history")
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     private func rowTooltip(_ row: HistoryDatabase.TopAppEnergy) -> String {
@@ -257,8 +282,12 @@ struct MenuBarPanel: View {
     private var systemRow: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                withAnimation(.easeInOut(duration: 0.16)) {
+                if reduceMotion {
                     systemExpanded.toggle()
+                } else {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        systemExpanded.toggle()
+                    }
                 }
             } label: {
                 HStack(spacing: 8) {
@@ -281,7 +310,7 @@ struct MenuBarPanel: View {
             .accessibilityLabel("System processes")
             .accessibilityIdentifier(AccessibilityIdentifiers.menuSystemProcesses)
             .accessibilityValue(systemExpanded ? "Expanded" : "Collapsed")
-            .accessibilityHint("Shows system processes and their recent energy use")
+            .accessibilityHint("Shows system processes and their recent CPU energy use")
 
             if systemExpanded {
                 VStack(alignment: .leading, spacing: 6) {
@@ -335,6 +364,7 @@ struct MenuBarPanel: View {
                 }
             }
             .buttonStyle(.plain)
+            .keyboardShortcut("h", modifiers: .command)
             .accessibilityLabel("Open History")
             .accessibilityIdentifier(AccessibilityIdentifiers.menuOpenHistory)
 
@@ -345,6 +375,7 @@ struct MenuBarPanel: View {
                 } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
+                .keyboardShortcut(",", modifiers: .command)
                 .accessibilityLabel("Settings")
                 .accessibilityIdentifier(AccessibilityIdentifiers.menuSettings)
                 Button {
@@ -365,6 +396,7 @@ struct MenuBarPanel: View {
                 } label: {
                     Label("Quit", systemImage: "power")
                 }
+                .keyboardShortcut("q", modifiers: .command)
                 .accessibilityLabel("Quit")
                 .accessibilityIdentifier(AccessibilityIdentifiers.menuQuit)
             }

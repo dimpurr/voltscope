@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Add accessibility label, value, and stable identifier to the menu bar status item.
+- Speak recorded CPU energy in Joules (or CPU seconds on Intel) for menu bar panel app rows, group rows as accessible containers, and provide an action to open History.
+- Hide decorative app icons and battery health bar progress visuals from the accessibility tree to eliminate duplicate VoiceOver speech.
+- Add keyboard shortcuts (`Cmd+H`, `Cmd+,`, `Cmd+Q`, `Esc`) to the menu bar panel and Settings window.
+- Respect `reduceMotion` accessibility setting when expanding system processes in the menu bar panel.
+- Increase contrast and support high contrast outline mode for `IntensityDots`.
+- Provide customizable summaries and accessibility hiding on `SparklineMini`.
+- Add confirmation dialog and destructive action styling for manual legacy database deletion in Settings.
+- Make the Settings window scrollable and flexibly sized to prevent clipping under large dynamic text sizes.
+- Label database migration progress and surface deletion errors in Settings.
+- Add stable accessibility identifiers for onboarding action buttons in the Welcome window.
+- Display an alert dialog on CSV export interval calculation failure instead of failing silently.
+
 ## 0.10.2 — 2026-10-04
 
 - Label CSV group metadata as `app_name` and `app_path` so exports do not imply

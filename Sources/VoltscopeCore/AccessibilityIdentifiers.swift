@@ -1,6 +1,7 @@
 /// Stable accessibility identifiers used by the macOS UI and UI automation.
 /// Treat these values as a public interface: do not rename them casually.
 public enum AccessibilityIdentifiers {
+    public static let menuBarItem = "menu.barItem"
     public static let menuOpenHistory = "menu.openHistory"
     public static let menuSettings = "menu.settings"
     public static let menuCheckForUpdates = "menu.checkForUpdates"
@@ -19,12 +20,42 @@ public enum AccessibilityIdentifiers {
     public static let settingsOpenLoginItems = "settings.openLoginItems"
     public static let settingsRawRetention = "settings.rawRetention"
     public static let settingsDeleteLegacyDatabase = "settings.deleteLegacyDatabase"
+    public static let welcomeNotNow = "welcome.notNow"
+    public static let welcomeDone = "welcome.done"
+    public static let welcomeOpenLoginItems = "welcome.openLoginItems"
+    public static let welcomeEnableAtLogin = "welcome.enableAtLogin"
 }
 
 /// Spoken accessibility text for controls whose labels explain dynamic state.
 public enum AccessibilityLabels {
     public static func openHistoryFromApp(name: String) -> String {
         "Open History from \(name)"
+    }
+
+    public static func menuBarBatteryValue(levelPercent: Double?, isCharging: Bool, isACPlugged: Bool) -> String {
+        guard let level = levelPercent else {
+            return "Battery status unavailable"
+        }
+        let percent = Int(level.rounded())
+        let state: String
+        if isCharging {
+            state = "charging"
+        } else if isACPlugged {
+            state = "on AC power"
+        } else {
+            state = "on battery"
+        }
+        return "\(percent) percent, \(state)"
+    }
+
+    public static func menuBarAppRowValue(energyNJ: Int64, cpuNS: Int64, energyAvailable: Bool) -> String {
+        if energyAvailable {
+            let joules = Double(energyNJ) / 1_000_000_000.0
+            return String(format: "%.2f J recorded CPU energy", joules)
+        } else {
+            let seconds = Double(cpuNS) / 1_000_000_000.0
+            return String(format: "%.1fs CPU time", seconds)
+        }
     }
 
     public static func batteryPowerHint(available: Bool, isCharging: Bool, isACPlugged: Bool) -> String {

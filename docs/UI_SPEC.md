@@ -256,12 +256,13 @@ values such as charge percentage and charging state remain in the spoken label.
 Decorative symbols and progress decoration are hidden from the accessibility
 tree when their information is already expressed in text.
 
-The current menu, History, and Settings identifiers are declared in
+The current menu, History, Settings, and Welcome identifiers are declared in
 `AccessibilityIdentifiers` and are covered by `AccessibilityIdentifierTests`.
 Their public English values and controls are:
 
 | Identifier | Control |
 |---|---|
+| `menu.barItem` | Menu bar item label |
 | `menu.openHistory` | Menu bar Open History action |
 | `menu.settings` | Menu bar Settings action |
 | `menu.checkForUpdates` | Menu bar Check for Updates action |
@@ -278,6 +279,19 @@ Their public English values and controls are:
 | `settings.openLoginItems` | Open Login Items action |
 | `settings.rawRetention` | Raw detail retention period picker |
 | `settings.deleteLegacyDatabase` | Delete old database action |
+| `welcome.notNow` | Welcome onboarding Not Now button |
+| `welcome.done` | Welcome onboarding Done button |
+| `welcome.openLoginItems` | Welcome onboarding Open Login Items button |
+| `welcome.enableAtLogin` | Welcome onboarding Enable at Login button |
+
+Menu bar panel app rows are exposed as accessible containers that speak
+recorded CPU energy in joules on Apple Silicon or CPU seconds on Intel,
+providing an accessible action to open History. Keyboard shortcuts
+(`Cmd+H` for History, `Cmd+,` for Settings, `Cmd+Q` for Quit, and `Esc` to
+dismiss) are supported. The Settings window is scrollable to accommodate
+large dynamic text sizes, supports `Esc` to dismiss, and requires
+confirmation before deleting legacy database files. CSV export errors display
+an alert prompt rather than failing silently.
 
 The History status bar's battery power value keeps its state-specific qualifier
 available both as hover help and as the combined accessibility element's hint.

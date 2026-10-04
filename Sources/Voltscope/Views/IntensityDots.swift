@@ -8,16 +8,33 @@ struct IntensityDots: View {
     /// 1-based count of filled dots out of `total`.
     let filled: Int
     var total: Int = 3
+    @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
         HStack(spacing: 3) {
             ForEach(0..<total, id: \.self) { index in
+                let isFilled = index < filled
                 Circle()
-                    .fill(index < filled ? Color.red : Color.secondary.opacity(0.18))
+                    .fill(dotFill(isFilled: isFilled))
+                    .overlay {
+                        if contrast == .increased {
+                            Circle()
+                                .strokeBorder(isFilled ? Color.primary : Color.secondary, lineWidth: 0.75)
+                        }
+                    }
                     .frame(width: 6, height: 6)
             }
         }
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("Intensity \(filled) of \(total)")
+        .accessibilityValue("\(filled) of \(total) dots")
+    }
+
+    private func dotFill(isFilled: Bool) -> Color {
+        if isFilled {
+            return Color.red
+        }
+        return contrast == .increased ? Color.secondary.opacity(0.45) : Color.secondary.opacity(0.30)
     }
 
     /// Pure helper: bucket a value against a max into 1–3 dots.

@@ -11,6 +11,8 @@ struct SparklineMini: View {
     var color: Color = .accentColor
     var width: CGFloat = 80
     var height: CGFloat = 18
+    var summary: String? = nil
+    var isAccessibilityHidden: Bool = false
 
     var body: some View {
         Canvas { context, size in
@@ -26,6 +28,9 @@ struct SparklineMini: View {
             }
         }
         .frame(width: width, height: height)
-        .accessibilityLabel("CPU or hardware energy trend; scaled within this row")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(summary != nil ? "Energy trend" : "CPU or hardware energy trend; scaled within this row")
+        .accessibilityValue(summary ?? "")
+        .accessibilityHidden(isAccessibilityHidden)
     }
 }

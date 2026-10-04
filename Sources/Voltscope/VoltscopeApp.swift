@@ -34,9 +34,10 @@ struct VoltscopeApp: App {
         Window("Voltscope Settings", id: "settings") {
             SettingsView()
                 .environmentObject(appState)
-                .frame(width: 420, height: 300)
+                .frame(minWidth: 420, maxWidth: 520, minHeight: 300, maxHeight: 480)
                 .onAppear { appState.refreshLoginItemStatus() }
         }
+        .windowResizability(.contentSize)
 
         .commands {
             CommandGroup(after: .appInfo) {
@@ -78,6 +79,7 @@ final class AppState: ObservableObject {
     @Published var unreadableProcessCount = 0
     @Published var legacyImportStatus: HistoryDatabase.ImportStatus?
     @Published var legacyImportProgress: LegacyImportProgress?
+    @Published var legacyDeletionError: String?
     @Published var rawRetentionDays = 7
 
     @Published private(set) var loginItemStatus: LoginItemStatusKind
@@ -333,8 +335,15 @@ final class AppState: ObservableObject {
     func deleteLegacyDatabaseNow() {
         guard let database, let url = try? AppPaths.databaseURL(), legacyImportStatus?.state == .done else { return }
         Task {
-            do { try await database.deleteLegacyDatabaseImmediately(at: url) }
-            catch { statusText = "Old database could not be deleted: \(error.localizedDescription)" }
+            do {
+                try await database.deleteLegacyDatabaseImmediately(at: url)
+                await MainActor.run { self.legacyDeletionError = nil }
+            } catch {
+                await MainActor.run {
+                    self.legacyDeletionError = error.localizedDescription
+                    self.statusText = "Old database could not be deleted: \(error.localizedDescription)"
+                }
+            }
         }
     }
 }

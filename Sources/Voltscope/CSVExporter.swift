@@ -9,8 +9,16 @@ enum CSVExporter {
     @MainActor
     static func exportEnergyHistory(database: HistoryDatabase, interval: DateInterval) async {
         let exportInterval: DateInterval
-        do { exportInterval = try await database.rawCSVInterval(in: interval) }
-        catch { return }
+        do {
+            exportInterval = try await database.rawCSVInterval(in: interval)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Export failed"
+            alert.informativeText = "Could not calculate export interval: \(error.localizedDescription)"
+            alert.alertStyle = .warning
+            alert.runModal()
+            return
+        }
         let panel = NSSavePanel()
         panel.title = "Export Energy History as CSV"
         if exportInterval.start > interval.start {
