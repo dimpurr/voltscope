@@ -190,13 +190,21 @@ public actor SamplingCoordinator {
     }
 
     @discardableResult
-    private func runBucketTick(emit: Bool) async -> Int {
-        let rows = bucketSampler.sample()
+    func runBucketTick(emit: Bool, at date: Date = Date()) async -> Int {
+        let checkpoint = emit ? bucketSampler.makeCheckpoint() : nil
+        let rows = bucketSampler.sample(at: date)
         guard emit, !rows.isEmpty else { return 0 }
         // The hardware sampler has its own counter baseline and writes its
         // bucket deltas to the same history store.
         do { try await database.writeBuckets(timestamp: rows[0].timestamp, buckets: rows.map { SampledBucket(name: $0.bucketName, energyNJ: $0.energyNJ) }) }
-        catch { logError("History bucket insert failed: \(error)") }
+        catch {
+            if let checkpoint,
+               let bufferError = error as? HistoryWindowBufferError,
+               case .pendingLimitReached = bufferError {
+                checkpoint.restore()
+            }
+            logError("History bucket insert failed: \(error)")
+        }
         return rows.count
     }
 

@@ -13,6 +13,9 @@
 - Preserve process counter deltas when a full history write queue rejects a
   sampling tick, and restrict rollups to indexed timestamp ranges after their
   watermarks.
+- Preserve process and hardware counter deltas when a full history write queue
+  rejects a sampling tick, and restrict rollups to indexed timestamp ranges
+  after their watermarks.
 
 ## 0.10.1 — 2026-10-04
 

@@ -15,6 +15,33 @@ final class HistoryWriterTests: XCTestCase {
         }
     }
 
+    private final class CumulativeBucketSequence: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [Int64]
+        private var previous: Int64?
+
+        init(_ values: [Int64]) { self.values = values }
+
+        func sample(at date: Date) -> [SystemBucket] {
+            lock.lock(); defer { lock.unlock() }
+            guard !values.isEmpty else { return [] }
+            let value = values.removeFirst()
+            let old = previous
+            previous = value
+            guard let old else { return [] }
+            return [SystemBucket(timestamp: Int64(date.timeIntervalSince1970 * 1000),
+                                 bucketName: "CPU", energyNJ: value - old)]
+        }
+
+        func makeCheckpoint() -> BucketSamplingCheckpoint {
+            lock.lock(); let state = previous; lock.unlock()
+            return BucketSamplingCheckpoint { [weak self] in
+                guard let self else { return }
+                self.lock.lock(); self.previous = state; self.lock.unlock()
+            }
+        }
+    }
+
     private func processSnapshot(pid: Int32, start: UInt64, energy: UInt64) -> ProcessSnapshot {
         ProcessSnapshot(pid: pid, parentPid: 1, bundleIdentifier: "bounded.coordinator",
                         processName: "Queue", path: "/Queue", cpuUserNs: 0,
@@ -509,6 +536,47 @@ final class HistoryWriterTests: XCTestCase {
 
         let total = try await sum(db, sql: "SELECT SUM(energyNJ) FROM AppSampleRaw WHERE pid = 90")
         XCTAssertEqual(total, 40, "the rejected 30 nJ delta must be replayed with the next 10 nJ delta")
+    }
+
+    func testRejectedBucketTickCanBeRecoveredFromCumulativeCounter() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let start = epoch(2026, 1, 2, 3, 4)
+        let sequence = CumulativeBucketSequence([100, 130, 140])
+        let sampler = BucketSampler(sampleReader: { sequence.sample(at: $0) },
+                                     checkpointReader: { sequence.makeCheckpoint() })
+        let coordinator = SamplingCoordinator(database: db, bucketSampler: sampler)
+        func tickDate(_ offset: Int64) -> Date {
+            Date(timeIntervalSince1970: Double(start + offset) / 1000)
+        }
+        _ = await coordinator.runBucketTick(emit: false, at: tickDate(0))
+
+        try await db.writeTick(timestamp: start,
+            apps: [SampledApp(groupKey: "bounded.bucket", displayName: "Queue", pid: 93,
+                              energyNJ: 10, cpuNs: 10)], buckets: [],
+            coverage: SampleCoverage(visible: 1, unreadable: 0))
+        try await db.dbPool.write { conn in
+            try conn.execute(sql: """
+                CREATE TEMP TRIGGER fail_raw_insert BEFORE INSERT ON AppSampleRaw
+                BEGIN SELECT RAISE(FAIL, 'injected write failure'); END
+                """)
+        }
+        for window in 1...8 {
+            do {
+                try await db.writeTick(timestamp: start + Int64(window * 30_000),
+                    apps: [SampledApp(groupKey: "bounded.bucket", displayName: "Queue", pid: 93,
+                                      energyNJ: 1, cpuNs: 1)], buckets: [],
+                    coverage: SampleCoverage(visible: 1, unreadable: 0))
+            } catch { }
+        }
+
+        _ = await coordinator.runBucketTick(emit: true, at: tickDate(270_000))
+        try await db.dbPool.write { conn in try conn.execute(sql: "DROP TRIGGER fail_raw_insert") }
+        try await db.flushPendingWindow()
+        _ = await coordinator.runBucketTick(emit: true, at: tickDate(300_000))
+        try await db.flushPendingWindow()
+
+        let total = try await sum(db, sql: "SELECT SUM(energyNJ) FROM BucketSampleRaw")
+        XCTAssertEqual(total, 40, "the rejected 30 nJ bucket delta must be replayed with the next 10 nJ delta")
     }
 
     func testMinuteRollupUsesRawTimestampRangeIndex() async throws {

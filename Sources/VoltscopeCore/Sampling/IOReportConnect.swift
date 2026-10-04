@@ -44,6 +44,16 @@ public final class IOReportConnectSampler: @unchecked Sendable {
 
     public var available: Bool { setupSucceeded }
 
+    /// Captures the cumulative hardware-counter baseline so a rejected history
+    /// write can replay its deltas on the next bucket sample.
+    func makeCheckpoint() -> BucketSamplingCheckpoint {
+        let state = queue.sync { previousValues }
+        return BucketSamplingCheckpoint { [weak self] in
+            guard let self else { return }
+            self.queue.sync { self.previousValues = state }
+        }
+    }
+
     public func sample(at date: Date = Date()) -> [SystemBucket] {
         queue.sync {
             ensureSetup()

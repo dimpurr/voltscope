@@ -3,15 +3,34 @@ import CoreFoundation
 
 /// Samples hardware energy counters from the system Energy Model.
 public final class BucketSampler: @unchecked Sendable {
-    private let connectSampler = IOReportConnectSampler()
+    private let sampleReader: (Date) -> [SystemBucket]
+    private let checkpointReader: () -> BucketSamplingCheckpoint
+    private let availableReader: () -> Bool
 
-    public init() {}
+    public init() {
+        let connectSampler = IOReportConnectSampler()
+        self.sampleReader = { connectSampler.sample(at: $0) }
+        self.checkpointReader = { connectSampler.makeCheckpoint() }
+        self.availableReader = { connectSampler.available }
+    }
 
-    public var available: Bool { connectSampler.available }
+    init(
+        sampleReader: @escaping (Date) -> [SystemBucket],
+        checkpointReader: @escaping () -> BucketSamplingCheckpoint,
+        availableReader: @escaping () -> Bool = { true }
+    ) {
+        self.sampleReader = sampleReader
+        self.checkpointReader = checkpointReader
+        self.availableReader = availableReader
+    }
+
+    public var available: Bool { availableReader() }
 
     public func sample(at date: Date = Date()) -> [SystemBucket] {
-        connectSampler.sample(at: date)
+        sampleReader(date)
     }
+
+    func makeCheckpoint() -> BucketSamplingCheckpoint { checkpointReader() }
 
     /// Select one available level per physical quantity and per die. A top-level
     /// summary wins; without one, CPU cluster channels are the fallback level.
@@ -99,4 +118,12 @@ public final class BucketSampler: @unchecked Sendable {
         if lower.contains("pcie") || lower.contains("apciec") { return "PCIe" }
         return name
     }
+}
+
+final class BucketSamplingCheckpoint: @unchecked Sendable {
+    private let restoreState: () -> Void
+
+    init(restoreState: @escaping () -> Void) { self.restoreState = restoreState }
+
+    func restore() { restoreState() }
 }

@@ -255,12 +255,12 @@ Populated only when helper is installed. Contains powermetrics-derived joule rat
    `Coverage` records the last scan in each window. Failed transactions remain
    queued in order and retry on the next flush. The queue holds at most eight
    completed windows; when full, the writer rejects a further boundary change
-   without clearing the active window. The coordinator restores the process
-   sampler's pre-tick counter baseline for this queue-full rejection, so the next
-   scan includes the rejected cumulative-counter delta. Shutdown only proceeds
-   after the final flush succeeds; on failure sampling resumes and termination
-   is cancelled so the queued batch can be retried. A partial final window is
-   persisted as-is.
+   without clearing the active window. The coordinator restores the process and
+   hardware samplers' pre-tick counter baselines for this queue-full rejection,
+   so the next scan includes the rejected cumulative-counter deltas. Shutdown
+   only proceeds after the final flush succeeds; on failure sampling resumes
+   and termination is cancelled so the queued batch can be retried. A partial
+   final window is persisted as-is.
 4. The existing five-minute checkpoint timer runs the maintenance phases:
    minute rollup, hour rollup, retention pruning, and bounded incremental vacuum.
    It then requests an out-of-transaction `wal_checkpoint(TRUNCATE)` so the
