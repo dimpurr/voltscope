@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## Unreleased — 0.10.3
 
 - Add accessibility label, value, and stable identifier to the menu bar status item.
 - Speak recorded CPU energy in Joules (or CPU seconds on Intel) for menu bar panel app rows, group rows as accessible containers, and provide an action to open History.
