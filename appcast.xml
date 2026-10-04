@@ -1,0 +1,33 @@
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Voltscope</title>
+        <item>
+            <title>0.10.2</title>
+            <pubDate>Sun, 04 Oct 2026 10:16:35 +0100</pubDate>
+            <link>https://github.com/dimpurr/voltscope/releases</link>
+            <sparkle:version>13</sparkle:version>
+            <sparkle:shortVersionString>0.10.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/dimpurr/voltscope/releases/download/v0.10.2/Voltscope-0.10.2-universal2.dmg" length="6577518" type="application/octet-stream" sparkle:edSignature="An0KJ7mZiOKGpnMPq1Y/1RYFKtgyBDlokCDLF5vubZmHF+0ZuY5+8eNPRlYrkd/O5ZyH0yLg3yjKy3LNDUXXDQ=="/>
+        </item>
+        <item>
+            <title>0.10.1</title>
+            <pubDate>Sun, 04 Oct 2026 04:46:53 +0100</pubDate>
+            <link>https://github.com/dimpurr/voltscope/releases</link>
+            <sparkle:version>12</sparkle:version>
+            <sparkle:shortVersionString>0.10.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/dimpurr/voltscope/releases/download/v0.10.1/Voltscope-0.10.1-universal2.dmg" length="6559059" type="application/octet-stream" sparkle:edSignature="14xGV3N4b6pnSyDCwIX73N8X+L2fIbuP8Cdoa5hAm+q/HtKWevMQHd+R6kk3fQohHzXZ/BOqb4K1xTRpn3p0Dw=="/>
+        </item>
+        <item>
+            <title>0.10.0</title>
+            <pubDate>Sat, 03 Oct 2026 06:01:39 +0100</pubDate>
+            <link>https://github.com/dimpurr/voltscope/releases</link>
+            <sparkle:version>11</sparkle:version>
+            <sparkle:shortVersionString>0.10.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/dimpurr/voltscope/releases/download/v0.10.0/Voltscope-0.10.0-universal2.dmg" length="6381993" type="application/octet-stream" sparkle:edSignature="EGtH233BVZGGoaQD8G9xBcChGN9DTic/2DjDzSR9kTeCRww1IJPncG5muAXReMWJvWvEv+honq+tDGKPl64eCw=="/>
+        </item>
+    </channel>
+</rss>
