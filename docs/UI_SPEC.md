@@ -305,18 +305,18 @@ The History status bar's battery power value keeps its state-specific qualifier
 available both as hover help and as the combined accessibility element's hint.
 The qualifier distinguishes charging flow, battery discharge, and battery
 current while connected to AC; it does not describe total system or adapter
-power. In light mode, the discharging indicator uses an adaptive amber color to
-meet WCAG contrast requirements.
+power.
 
 History charts provide full assistive technology coverage: the battery chart
-describes charging intervals and sleep periods in its Audio Graph and VoiceOver
-summary, and visual axis labels are hidden to avoid redundant spoken numbers.
-The App CPU energy chart supports keyboard-based slice scrubbing via arrow keys,
-legend buttons announce highlighted status, and legacy bucket intervals include
-dashed boundary indicators. Hardware breakdown rows group channel metrics into
-single VoiceOver elements expressing relative magnitudes of the largest hardware
-channel, and app breakdown rows support keyboard selection with chart highlight
-synchronization.
+speaks charging intervals and sleep periods in its VoiceOver summary with
+occurrence counts and totals clipped to the selected range, and its chart
+descriptor carries only real battery readings; visual axis labels are hidden to
+avoid redundant spoken numbers.
+The App CPU energy chart supports keyboard-based slice scrubbing via arrow keys
+and legend buttons announce highlighted status. Hardware breakdown rows group
+channel metrics into single VoiceOver elements expressing relative magnitudes of
+the largest hardware channel, and app breakdown rows expose per-app
+accessibility identifiers.
 
 ### Chart hover behavior (v0.5.2)
 

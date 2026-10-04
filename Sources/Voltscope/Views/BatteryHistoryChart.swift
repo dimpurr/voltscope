@@ -7,7 +7,6 @@ struct BatteryHistoryChart: View {
     let events: [PowerEvent]
     let domain: ClosedRange<Date>
     let selection: DateInterval?
-    @Environment(\.colorSchemeContrast) private var colorContrast
 
     private struct LevelPoint: Identifiable {
         let date: Date
@@ -62,46 +61,24 @@ struct BatteryHistoryChart: View {
     }
 
     private var accessibilityPoints: [HistoryChartAccessibility.Point] {
-        snapshots.compactMap { snapshot in
-            guard let level = snapshot.levelPercent else { return nil }
-            let date = Date(timeIntervalSince1970: Double(snapshot.timestamp) / 1000)
-            guard domain.contains(date) else { return nil }
-            return HistoryChartAccessibility.Point(date: date, value: min(100, max(0, level)))
-        }
+        HistoryChartAccessibility.batteryPoints(snapshots: snapshots, domain: domain)
     }
 
     private var accessibilitySummary: String {
         HistoryChartAccessibility.summary(title: "Battery level", range: domain, points: accessibilityPoints,
-                                          unit: "percent", bucketSeconds: 30, hasMissingIntervals: snapshots.contains { $0.levelPercent == nil },
+                                          unit: "percent", bucketSeconds: 30,
+                                          hasMissingIntervals: snapshots.contains { $0.levelPercent == nil && domain.contains(Date(timeIntervalSince1970: Double($0.timestamp) / 1000)) },
                                           chargingIntervals: charging, sleepIntervals: sleep,
                                           scopeNote: "Battery state of charge, from 0 to 100 percent.")
     }
 
     private var chartDescriptor: HistoryAXChartDescriptor {
         let grouped = Dictionary(grouping: levels.filter { domain.contains($0.date) }, by: \.segment)
-        var series = grouped.keys.sorted().map { segment in
+        let series = grouped.keys.sorted().map { segment in
             HistoryAXSeries(name: "Battery level segment \(segment + 1)",
                             points: grouped[segment, default: []].map {
                                 AXDataPoint(x: $0.date.timeIntervalSince1970, y: $0.level, label: $0.date.formatted())
                             }, isContinuous: true)
-        }
-        if !charging.isEmpty {
-            let chargingPoints = charging.flatMap { interval in
-                [
-                    AXDataPoint(x: interval.start.timeIntervalSince1970, y: 100, label: "Charging began at \(interval.start.formatted(date: .abbreviated, time: .shortened))"),
-                    AXDataPoint(x: interval.end.timeIntervalSince1970, y: 100, label: "Charging ended at \(interval.end.formatted(date: .abbreviated, time: .shortened))")
-                ]
-            }
-            series.append(HistoryAXSeries(name: "Charging intervals", points: chargingPoints, isContinuous: false))
-        }
-        if !sleep.isEmpty {
-            let sleepPoints = sleep.flatMap { interval in
-                [
-                    AXDataPoint(x: interval.start.timeIntervalSince1970, y: 0, label: "Sleep began at \(interval.start.formatted(date: .abbreviated, time: .shortened))"),
-                    AXDataPoint(x: interval.end.timeIntervalSince1970, y: 0, label: "Wake at \(interval.end.formatted(date: .abbreviated, time: .shortened))")
-                ]
-            }
-            series.append(HistoryAXSeries(name: "Sleep periods", points: sleepPoints, isContinuous: false))
         }
         return HistoryAXChartDescriptor(title: "Battery level", summary: accessibilitySummary,
                                         xTitle: "Time", yTitle: "Percent", xRange: domain.lowerBound.timeIntervalSince1970...domain.upperBound.timeIntervalSince1970,
@@ -132,7 +109,7 @@ struct BatteryHistoryChart: View {
                     }
                     ForEach(sleep.indices, id: \.self) { i in
                         RectangleMark(xStart: .value("Start", sleep[i].start), xEnd: .value("End", sleep[i].end), yStart: .value("Bottom", -15), yEnd: .value("Top", -10))
-                            .foregroundStyle(.secondary.opacity(colorContrast == .increased ? 0.75 : 0.55))
+                            .foregroundStyle(.secondary.opacity(0.35))
                     }
                     if let selection {
                         RectangleMark(xStart: .value("Start", selection.start), xEnd: .value("End", selection.end), yStart: .value("Bottom", 0), yEnd: .value("Top", 100))

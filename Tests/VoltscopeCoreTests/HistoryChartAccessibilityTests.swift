@@ -90,6 +90,82 @@ final class HistoryChartAccessibilityTests: XCTestCase {
         XCTAssertTrue(summary.contains("Sleep: 1 period, total 1 min"))
     }
 
+    func testSummaryClipsChargingAndSleepIntervalsToRange() {
+        let charging = [
+            DateInterval(start: date(-100), end: date(50)),
+            DateInterval(start: date(250), end: date(400))
+        ]
+        let sleep = [
+            DateInterval(start: date(-50), end: date(-10)),
+            DateInterval(start: date(100), end: date(220))
+        ]
+        let summary = HistoryChartAccessibility.summary(
+            title: "Battery level", range: date(0)...date(300),
+            points: [.init(date: date(0), value: 50), .init(date: date(300), value: 60)],
+            unit: "percent",
+            chargingIntervals: charging,
+            sleepIntervals: sleep
+        )
+
+        XCTAssertTrue(summary.contains("Charging: 2 intervals, total 1 min"))
+        XCTAssertTrue(summary.contains("Sleep: 1 period, total 2 min"))
+    }
+
+    func testSummaryClipsIntervalsWhenNoBatteryPoints() {
+        let charging = [DateInterval(start: date(-100), end: date(60))]
+        let sleep = [DateInterval(start: date(120), end: date(500))]
+        let summary = HistoryChartAccessibility.summary(
+            title: "Battery level", range: date(0)...date(300),
+            points: [], unit: "percent",
+            chargingIntervals: charging,
+            sleepIntervals: sleep
+        )
+
+        XCTAssertTrue(summary.contains("No data"))
+        XCTAssertTrue(summary.contains("Charging: 1 interval, total 1 min"))
+        XCTAssertTrue(summary.contains("Sleep: 1 period, total 3 min"))
+    }
+
+    func testBatteryPointsContainOnlyRealReadingsInsideDomain() {
+        let snapshots = [
+            BatterySnapshot(timestamp: 0, levelPercent: 50, capacityMAh: nil, designMAh: nil, cycleCount: nil,
+                           voltageMV: nil, amperageMA: nil, temperatureC: nil, timeRemainingMin: nil,
+                           isCharging: true, isACPlugged: true),
+            BatterySnapshot(timestamp: 30_000, levelPercent: nil, capacityMAh: nil, designMAh: nil, cycleCount: nil,
+                           voltageMV: nil, amperageMA: nil, temperatureC: nil, timeRemainingMin: nil,
+                           isCharging: false, isACPlugged: false),
+            BatterySnapshot(timestamp: 60_000, levelPercent: 140, capacityMAh: nil, designMAh: nil, cycleCount: nil,
+                           voltageMV: nil, amperageMA: nil, temperatureC: nil, timeRemainingMin: nil,
+                           isCharging: false, isACPlugged: false),
+            BatterySnapshot(timestamp: 600_000, levelPercent: 80, capacityMAh: nil, designMAh: nil, cycleCount: nil,
+                           voltageMV: nil, amperageMA: nil, temperatureC: nil, timeRemainingMin: nil,
+                           isCharging: false, isACPlugged: false)
+        ]
+
+        let points = HistoryChartAccessibility.batteryPoints(snapshots: snapshots, domain: date(0)...date(300))
+
+        XCTAssertEqual(points, [
+            .init(date: date(0), value: 50),
+            .init(date: date(60), value: 100)
+        ])
+    }
+
+    func testClipIntervalsDropsEmptyAndClampsPartialOverlaps() {
+        let range = date(100)...date(200)
+        let clipped = HistoryChartAccessibility.clipIntervals([
+            DateInterval(start: date(0), end: date(50)),
+            DateInterval(start: date(50), end: date(100)),
+            DateInterval(start: date(150), end: date(160)),
+            DateInterval(start: date(180), end: date(260)),
+            DateInterval(start: date(300), end: date(400))
+        ], to: range)
+
+        XCTAssertEqual(clipped, [
+            DateInterval(start: date(150), end: date(160)),
+            DateInterval(start: date(180), end: date(200))
+        ])
+    }
+
     func testFormatDuration() {
         XCTAssertEqual(HistoryChartAccessibility.formatDuration(45), "45 s")
         XCTAssertEqual(HistoryChartAccessibility.formatDuration(120), "2 min")

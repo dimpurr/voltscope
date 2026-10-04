@@ -72,7 +72,6 @@ private struct BucketRow: View {
     let summary: HistoryDatabase.BucketSummary
     let totalJ: Double
     let bucketSeconds: Int
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let joules = Double(summary.totalEnergyNJ) / 1_000_000_000.0
@@ -115,7 +114,7 @@ private struct BucketRow: View {
         case "GPU":         return .purple
         case "ANE":         return .red
         case "Video":       return .pink
-        case "Camera":      return colorScheme == .light ? Color(nsColor: .systemOrange) : .yellow
+        case "Camera":      return .yellow
         case "DRAM":        return .brown
         case "Fabric":      return .green
         case "Display":     return .orange

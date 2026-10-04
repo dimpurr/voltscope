@@ -78,10 +78,6 @@ struct EnergyStackedChart: View {
                         )
                         .foregroundStyle(.orange.opacity(0.18))
                         .accessibilityLabel("Data recorded with an older method; not added to current readings")
-                        RuleMark(x: .value("Older method boundary", date))
-                            .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 2]))
-                            .foregroundStyle(.orange.opacity(0.45))
-                            .accessibilityHidden(true)
                     }
                     ForEach(model.segments) { p in
                         RectangleMark(

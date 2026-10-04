@@ -3,7 +3,6 @@ import VoltscopeCore
 
 struct HistoryStatusBar: View {
     let battery: BatterySnapshot?
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(spacing: 24) {
@@ -95,8 +94,7 @@ struct HistoryStatusBar: View {
 
     private var drainIconColor: Color {
         guard let b = battery else { return .secondary }
-        if b.isCharging || b.isACPlugged { return .green }
-        return colorScheme == .light ? Color(nsColor: .systemOrange) : .yellow
+        return b.isCharging || b.isACPlugged ? .green : .yellow
     }
 
     private var drainText: String {
