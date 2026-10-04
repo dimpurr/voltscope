@@ -37,9 +37,11 @@ public struct ProcessSnapshot: Sendable, Equatable {
 }
 
 public final class ProcessSampler: @unchecked Sendable {
-    /// Previous-tick cumulative state, keyed by (pid, procStartAbstime).
-    /// We key on procStartAbstime as well to defend against PID reuse within
-    /// the sampling window — if the start time changes, we treat it as a new process.
+    typealias SnapshotReader = @Sendable () -> (snapshots: [ProcessSnapshot], unreadableCount: Int)
+
+    /// Last successful cumulative state, keyed by (pid, procStartAbstime).
+    /// A baseline survives up to two missed scans, and a changed start time is
+    /// treated as a new process to defend against PID reuse.
     private struct ProcessKey: Hashable {
         let pid: Int32
         let startAbstime: UInt64
@@ -119,7 +121,10 @@ public final class ProcessSampler: @unchecked Sendable {
     private var metadataCache = MetadataCache<MetadataKey, ProcessMetadata>()
 
     private var previous: [ProcessKey: ProcessSnapshot] = [:]
+    private var missedScans: [ProcessKey: Int] = [:]
     private let queue = DispatchQueue(label: "com.dimpurr.voltscope.processsampler")
+    private let snapshotReader: SnapshotReader?
+    private static let maximumMissedScans = 2
 
     /// Cached mach_timebase_info read once at init. Used to convert
     /// ri_user_time / ri_system_time (mach absolute time units) to nanoseconds.
@@ -135,17 +140,25 @@ public final class ProcessSampler: @unchecked Sendable {
     public let energyAvailable: Bool
 
     public init() {
-        var tb = mach_timebase_info(numer: 1, denom: 1)
-        mach_timebase_info(&tb)
-        self.timebaseNumer = tb.numer
-        self.timebaseDenom = tb.denom
-
-        // kern.pervasive_energy == 1 on Apple Silicon with DPE counters;
-        // 0 on Intel and VMs. Source: XNU bsd/kern/kern_sysctl.c:5158.
         var value: Int32 = 0
         var size = MemoryLayout<Int32>.size
         sysctlbyname("kern.pervasive_energy", &value, &size, nil, 0)
         self.energyAvailable = (value == 1)
+        self.snapshotReader = nil
+
+        var tb = mach_timebase_info(numer: 1, denom: 1)
+        mach_timebase_info(&tb)
+        self.timebaseNumer = tb.numer
+        self.timebaseDenom = tb.denom
+    }
+
+    init(energyAvailable: Bool, snapshotReader: @escaping SnapshotReader) {
+        self.energyAvailable = energyAvailable
+        self.snapshotReader = snapshotReader
+        var tb = mach_timebase_info(numer: 1, denom: 1)
+        mach_timebase_info(&tb)
+        self.timebaseNumer = tb.numer
+        self.timebaseDenom = tb.denom
     }
 
     /// Samples all visible processes once and returns a `ProcessSampleResult`
@@ -156,7 +169,7 @@ public final class ProcessSampler: @unchecked Sendable {
     /// - `unreadableCount` counts processes where proc_pid_rusage failed with EPERM.
     public func sampleAll(at date: Date = Date()) -> ProcessSampleResult {
         queue.sync {
-            let (snapshots, unreadableCount) = readAllProcesses()
+            let (snapshots, unreadableCount) = snapshotReader?() ?? readAllProcesses()
             let timestamp = Int64(date.timeIntervalSince1970 * 1000)
             let calendar = Calendar(identifier: .gregorian)
             let comps = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
@@ -173,6 +186,16 @@ public final class ProcessSampler: @unchecked Sendable {
 
             var nextPrevious: [ProcessKey: ProcessSnapshot] = [:]
             nextPrevious.reserveCapacity(snapshots.count)
+            var nextMissedScans: [ProcessKey: Int] = [:]
+            let observedKeys = Set(snapshots.map { ProcessKey(pid: $0.pid, startAbstime: $0.procStartAbstime) })
+
+            for (key, prior) in previous where !observedKeys.contains(key) {
+                let missed = missedScans[key, default: 0] + 1
+                if missed <= Self.maximumMissedScans {
+                    nextPrevious[key] = prior
+                    nextMissedScans[key] = missed
+                }
+            }
 
             for snap in snapshots {
                 let key = ProcessKey(pid: snap.pid, startAbstime: snap.procStartAbstime)
@@ -198,8 +221,12 @@ public final class ProcessSampler: @unchecked Sendable {
             }
 
             previous = nextPrevious
-            let activeMetadataKeys = Set(snapshots.map {
-                MetadataKey(pid: $0.pid, startAbstime: $0.procStartAbstime)
+            missedScans = nextMissedScans
+            // Keep metadata alongside counter baselines during the two-scan
+            // grace period; otherwise a transient unreadable scan would force
+            // identity resolution again when the same process becomes readable.
+            let activeMetadataKeys = Set(nextPrevious.keys.map {
+                MetadataKey(pid: $0.pid, startAbstime: $0.startAbstime)
             })
             metadataCache.retain(activeMetadataKeys)
             return ProcessSampleResult(

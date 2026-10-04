@@ -24,19 +24,49 @@ private struct WindowBatch {
     let coverage: SampleCoverage
 }
 
+enum HistoryWindowBufferError: Error {
+    case pendingLimitReached
+}
+
+actor HistoryWindowWriteGate {
+    private var isHeld = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if !isHeld {
+            isHeld = true
+            return
+        }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            isHeld = false
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+}
+
 /// Thread-safe in-memory coalescing for independently scheduled sampler calls.
 final class HistoryWindowBuffer: @unchecked Sendable {
     private let lock = NSLock()
+    private static let maximumPendingWindows = 8
     private var windowStart: Int64?
     private var apps: [WindowAppKey: WindowAppValue] = [:]
     private var buckets: [WindowBucketKey: Int64] = [:]
     private var coverage = SampleCoverage(visible: 0, unreadable: 0)
+    private var pending: [WindowBatch] = []
 
     fileprivate func append(timestamp: Int64, apps newApps: [SampledApp], buckets newBuckets: [SampledBucket],
-                coverage newCoverage: SampleCoverage?, version: Int, energyUnavailable: Bool) -> WindowBatch? {
+                             coverage newCoverage: SampleCoverage?, version: Int, energyUnavailable: Bool) throws -> Bool {
         lock.lock(); defer { lock.unlock() }
         let start = timestamp / 30_000 * 30_000
-        let completed = windowStart != nil && windowStart != start ? takeLocked() : nil
+        if windowStart != nil, windowStart != start {
+            guard pending.count < Self.maximumPendingWindows else { throw HistoryWindowBufferError.pendingLimitReached }
+            if let completed = takeLocked() { pending.append(completed) }
+        }
         if windowStart == nil || windowStart != start { windowStart = start }
         for sample in newApps where sample.energyNJ > 0 || (energyUnavailable && sample.cpuNs > 0) {
             let key = WindowAppKey(groupKey: sample.groupKey, pid: sample.pid, version: version)
@@ -52,12 +82,24 @@ final class HistoryWindowBuffer: @unchecked Sendable {
             buckets[key, default: 0] += sample.energyNJ
         }
         if let newCoverage { coverage = newCoverage }
-        return completed
+        return !pending.isEmpty
     }
 
-    fileprivate func flush() -> WindowBatch? {
+    fileprivate func enqueueCurrentWindow() throws {
         lock.lock(); defer { lock.unlock() }
-        return takeLocked()
+        guard windowStart != nil else { return }
+        guard pending.count < Self.maximumPendingWindows else { throw HistoryWindowBufferError.pendingLimitReached }
+        if let batch = takeLocked() { pending.append(batch) }
+    }
+
+    fileprivate func firstPending() -> WindowBatch? {
+        lock.lock(); defer { lock.unlock() }
+        return pending.first
+    }
+
+    fileprivate func removeFirstPending() {
+        lock.lock(); defer { lock.unlock() }
+        if !pending.isEmpty { pending.removeFirst() }
     }
 
     private func takeLocked() -> WindowBatch? {
@@ -136,9 +178,15 @@ public extension HistoryDatabase {
 
     /// Writes hardware bucket deltas from the independently scheduled sampler.
     func writeBuckets(timestamp: Int64, buckets: [SampledBucket], metricVersion: Int = EnergyMetric.currentVersion) async throws {
-        if let completed = windowBuffer.append(timestamp: timestamp, apps: [], buckets: buckets, coverage: nil,
-                                                version: metricVersion, energyUnavailable: false) {
-            try await persistWindow(completed)
+        await windowWriteGate.acquire()
+        do {
+            let hasPending = try windowBuffer.append(timestamp: timestamp, apps: [], buckets: buckets, coverage: nil,
+                                                     version: metricVersion, energyUnavailable: false)
+            if hasPending { try await persistPendingWindows() }
+            await windowWriteGate.release()
+        } catch {
+            await windowWriteGate.release()
+            throw error
         }
     }
 
@@ -153,15 +201,37 @@ public extension HistoryDatabase {
         metricVersion: Int = EnergyMetric.currentVersion,
         energyUnavailable: Bool = false
     ) async throws {
-        if let completed = windowBuffer.append(timestamp: timestamp, apps: apps, buckets: buckets, coverage: coverage,
-                                                version: metricVersion, energyUnavailable: energyUnavailable) {
-            try await persistWindow(completed)
+        await windowWriteGate.acquire()
+        do {
+            let hasPending = try windowBuffer.append(timestamp: timestamp, apps: apps, buckets: buckets, coverage: coverage,
+                                                     version: metricVersion, energyUnavailable: energyUnavailable)
+            if hasPending { try await persistPendingWindows() }
+            await windowWriteGate.release()
+        } catch {
+            await windowWriteGate.release()
+            throw error
         }
     }
 
     /// Persists the last partial window. Called by maintenance and sampler shutdown.
     func flushPendingWindow() async throws {
-        if let pending = windowBuffer.flush() { try await persistWindow(pending) }
+        await windowWriteGate.acquire()
+        do {
+            try await persistPendingWindows()
+            try windowBuffer.enqueueCurrentWindow()
+            try await persistPendingWindows()
+            await windowWriteGate.release()
+        } catch {
+            await windowWriteGate.release()
+            throw error
+        }
+    }
+
+    private func persistPendingWindows() async throws {
+        while let batch = windowBuffer.firstPending() {
+            try await persistWindow(batch)
+            windowBuffer.removeFirstPending()
+        }
     }
 
     private func persistWindow(_ batch: WindowBatch) async throws {

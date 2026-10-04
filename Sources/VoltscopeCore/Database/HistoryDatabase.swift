@@ -17,6 +17,7 @@ public final class HistoryDatabase: @unchecked Sendable {
 
     // Process and hardware samples share one pending UTC-aligned window.
     let windowBuffer = HistoryWindowBuffer()
+    let windowWriteGate = HistoryWindowWriteGate()
 
     public init(dbPool: any DatabaseWriter, fileURL: URL? = nil) throws {
         self.dbPool = dbPool

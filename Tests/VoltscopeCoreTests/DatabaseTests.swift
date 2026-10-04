@@ -208,6 +208,18 @@ final class ProcessSamplerTests: XCTestCase {
         XCTAssertNil(cache.value(for: key), "an unusable replacement must evict stale identity metadata")
     }
 
+    private final class SnapshotSequence: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [[ProcessSnapshot]]
+
+        init(_ values: [[ProcessSnapshot]]) { self.values = values }
+
+        func next() -> (snapshots: [ProcessSnapshot], unreadableCount: Int) {
+            lock.lock(); defer { lock.unlock() }
+            return (values.isEmpty ? [] : values.removeFirst(), 0)
+        }
+    }
+
     func testFirstTickEstablishesBaselineEmits() {
         let sampler = ProcessSampler()
         let first = sampler.sampleAll()
@@ -225,6 +237,50 @@ final class ProcessSamplerTests: XCTestCase {
             samplesMatchExpectedActivity(second.samples, energyAvailable: sampler.energyAvailable),
             "second sample should report activity using the metrics available on this Mac"
         )
+    }
+
+    func testTransientMissingProcessKeepsLastSuccessfulCounterBaseline() {
+        let sequence = SnapshotSequence([
+            [snapshot(pid: 80, start: 7, energy: 100)],
+            [],
+            [snapshot(pid: 80, start: 7, energy: 130)]
+        ])
+        let sampler = ProcessSampler(energyAvailable: true, snapshotReader: { sequence.next() })
+
+        XCTAssertTrue(sampler.sampleAll().samples.isEmpty)
+        XCTAssertTrue(sampler.sampleAll().samples.isEmpty)
+        let recovered = sampler.sampleAll()
+        XCTAssertEqual(recovered.samples.map(\.energyNJ), [30])
+    }
+
+    func testReusedPIDWithNewStartTimeDoesNotReuseOldCounterBaseline() {
+        let sequence = SnapshotSequence([
+            [snapshot(pid: 81, start: 7, energy: 100)],
+            [],
+            [snapshot(pid: 81, start: 8, energy: 200)],
+            [snapshot(pid: 81, start: 8, energy: 220)]
+        ])
+        let sampler = ProcessSampler(energyAvailable: true, snapshotReader: { sequence.next() })
+
+        _ = sampler.sampleAll()
+        _ = sampler.sampleAll()
+        XCTAssertTrue(sampler.sampleAll().samples.isEmpty)
+        XCTAssertEqual(sampler.sampleAll().samples.map(\.energyNJ), [20])
+    }
+
+    func testMissedProcessBaselineExpiresAfterBoundedTTL() {
+        let sequence = SnapshotSequence([
+            [snapshot(pid: 82, start: 7, energy: 100)],
+            [], [], [],
+            [snapshot(pid: 82, start: 7, energy: 130)]
+        ])
+        let sampler = ProcessSampler(energyAvailable: true, snapshotReader: { sequence.next() })
+
+        _ = sampler.sampleAll()
+        _ = sampler.sampleAll()
+        _ = sampler.sampleAll()
+        _ = sampler.sampleAll()
+        XCTAssertTrue(sampler.sampleAll().samples.isEmpty)
     }
 
     func testSampleActivityExpectationRejectsEmptyResultsAndAcceptsEachPlatform() {

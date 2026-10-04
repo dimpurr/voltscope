@@ -34,8 +34,8 @@ final class VoltscopeAppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let appState else { return .terminateNow }
         Task { @MainActor in
-            await appState.stopSamplingForTermination()
-            sender.reply(toApplicationShouldTerminate: true)
+            let stopped = await appState.stopSamplingForTermination()
+            sender.reply(toApplicationShouldTerminate: stopped)
         }
         return .terminateLater
     }

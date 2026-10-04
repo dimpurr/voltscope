@@ -123,11 +123,160 @@ final class HistoryWriterTests: XCTestCase {
             apps: [SampledApp(groupKey: "quit.app", displayName: "Quit", pid: 70,
                               energyNJ: 99, cpuNs: 101)], buckets: [],
             coverage: SampleCoverage(visible: 1, unreadable: 0))
-        await SamplingCoordinator(database: db).stop()
+        let stopped = await SamplingCoordinator(database: db).stop()
+        XCTAssertTrue(stopped)
         let persisted = try await db.dbPool.read { conn in
             try Int64.fetchOne(conn, sql: "SELECT SUM(energyNJ) FROM AppSampleRaw") ?? 0
         }
         XCTAssertEqual(persisted, 99)
+    }
+
+    func testCoordinatorReportsFailedShutdownFlushAndCanRetry() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        try await db.writeTick(timestamp: epoch(2026, 1, 2, 3, 4),
+            apps: [SampledApp(groupKey: "shutdown.retry", displayName: "Retry", pid: 75,
+                              energyNJ: 29, cpuNs: 29)], buckets: [],
+            coverage: SampleCoverage(visible: 1, unreadable: 0))
+        try await db.dbPool.write { conn in
+            try conn.execute(sql: """
+                CREATE TEMP TRIGGER fail_raw_insert BEFORE INSERT ON AppSampleRaw
+                BEGIN SELECT RAISE(FAIL, 'injected write failure'); END
+                """)
+        }
+        let coordinator = SamplingCoordinator(database: db)
+
+        let firstStop = await coordinator.stop()
+        XCTAssertFalse(firstStop)
+        try await db.dbPool.write { conn in
+            try conn.execute(sql: "DROP TRIGGER fail_raw_insert")
+        }
+        let retryStop = await coordinator.stop()
+        XCTAssertTrue(retryStop)
+        let total = try await sum(db, sql: "SELECT SUM(energyNJ) FROM AppSampleRaw")
+        XCTAssertEqual(total, 29)
+    }
+
+    func testFailedWindowBoundaryFlushRetainsBatchForRetry() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let firstWindow = epoch(2026, 1, 2, 3, 4)
+        try await db.writeTick(timestamp: firstWindow,
+            apps: [SampledApp(groupKey: "retry.app", displayName: "Retry", pid: 71,
+                              energyNJ: 10, cpuNs: 10)], buckets: [],
+            coverage: SampleCoverage(visible: 1, unreadable: 0))
+        try await db.dbPool.write { conn in
+            try conn.execute(sql: """
+                CREATE TEMP TRIGGER fail_raw_insert BEFORE INSERT ON AppSampleRaw
+                BEGIN SELECT RAISE(FAIL, 'injected write failure'); END
+                """)
+        }
+
+        do {
+            try await db.writeTick(timestamp: firstWindow + 30_000,
+                apps: [SampledApp(groupKey: "retry.app", displayName: "Retry", pid: 71,
+                                  energyNJ: 1, cpuNs: 1)], buckets: [],
+                coverage: SampleCoverage(visible: 1, unreadable: 0))
+            XCTFail("The injected trigger should reject the completed window")
+        } catch {
+            // The failed completed window must remain available for a later retry.
+        }
+
+        try await db.dbPool.write { conn in
+            try conn.execute(sql: "DROP TRIGGER fail_raw_insert")
+        }
+        try await db.flushPendingWindow()
+
+        let total = try await sum(db, sql: "SELECT SUM(energyNJ) FROM AppSampleRaw")
+        XCTAssertEqual(total, 11)
+    }
+
+    func testFailedExplicitFlushRetainsBatchForRetry() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        try await db.writeTick(timestamp: epoch(2026, 1, 2, 3, 4),
+            apps: [SampledApp(groupKey: "retry.flush", displayName: "Retry", pid: 72,
+                              energyNJ: 13, cpuNs: 13)], buckets: [],
+            coverage: SampleCoverage(visible: 1, unreadable: 0))
+        try await db.dbPool.write { conn in
+            try conn.execute(sql: """
+                CREATE TEMP TRIGGER fail_raw_insert BEFORE INSERT ON AppSampleRaw
+                BEGIN SELECT RAISE(FAIL, 'injected write failure'); END
+                """)
+        }
+        do {
+            try await db.flushPendingWindow()
+            XCTFail("The injected trigger should reject the explicit flush")
+        } catch {
+            // Retry after removing the injected storage failure.
+        }
+        try await db.dbPool.write { conn in
+            try conn.execute(sql: "DROP TRIGGER fail_raw_insert")
+        }
+        try await db.flushPendingWindow()
+
+        let total = try await sum(db, sql: "SELECT SUM(energyNJ) FROM AppSampleRaw")
+        XCTAssertEqual(total, 13)
+    }
+
+    func testFailedWindowQueueIsBoundedAndFlushCanDrainIt() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let start = epoch(2026, 1, 2, 3, 4)
+        try await db.writeTick(timestamp: start,
+            apps: [SampledApp(groupKey: "bounded.retry", displayName: "Retry", pid: 74,
+                              energyNJ: 10, cpuNs: 10)], buckets: [],
+            coverage: SampleCoverage(visible: 1, unreadable: 0))
+        try await db.dbPool.write { conn in
+            try conn.execute(sql: """
+                CREATE TEMP TRIGGER fail_raw_insert BEFORE INSERT ON AppSampleRaw
+                BEGIN SELECT RAISE(FAIL, 'injected write failure'); END
+                """)
+        }
+
+        for window in 1...8 {
+            do {
+                try await db.writeTick(timestamp: start + Int64(window * 30_000),
+                    apps: [SampledApp(groupKey: "bounded.retry", displayName: "Retry", pid: 74,
+                                      energyNJ: Int64(window), cpuNs: Int64(window))], buckets: [],
+                    coverage: SampleCoverage(visible: 1, unreadable: 0))
+            } catch {
+                // Each completed batch stays queued while the trigger rejects writes.
+            }
+        }
+        do {
+            try await db.writeTick(timestamp: start + 9 * 30_000,
+                apps: [SampledApp(groupKey: "bounded.retry", displayName: "Retry", pid: 74,
+                                  energyNJ: 9, cpuNs: 9)], buckets: [],
+                coverage: SampleCoverage(visible: 1, unreadable: 0))
+            XCTFail("The writer should apply backpressure at its pending-window bound")
+        } catch {
+            // The current window remains intact and the ninth queued window is rejected.
+        }
+
+        try await db.dbPool.write { conn in
+            try conn.execute(sql: "DROP TRIGGER fail_raw_insert")
+        }
+        try await db.flushPendingWindow()
+
+        let total = try await sum(db, sql: "SELECT SUM(energyNJ) FROM AppSampleRaw")
+        let count = try await db.dbPool.read { conn in
+            try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppSampleRaw") ?? 0
+        }
+        XCTAssertEqual(total, 46)
+        XCTAssertEqual(count, 9)
+    }
+
+    func testSleepEventFlushesPartialWindow() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let timestamp = epoch(2026, 1, 2, 3, 4)
+        try await db.writeTick(timestamp: timestamp,
+            apps: [SampledApp(groupKey: "sleep.app", displayName: "Sleep", pid: 73,
+                              energyNJ: 23, cpuNs: 23)], buckets: [],
+            coverage: SampleCoverage(visible: 1, unreadable: 0))
+
+        await SamplingCoordinator(database: db).recordEvent(
+            PowerEvent(timestamp: timestamp + 1, eventType: .sleep)
+        )
+
+        let total = try await sum(db, sql: "SELECT SUM(energyNJ) FROM AppSampleRaw")
+        XCTAssertEqual(total, 23)
     }
 
     func testMinuteRetentionKeepsFull24HourQueryComplete() async throws {

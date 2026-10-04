@@ -4,6 +4,7 @@ public actor SamplingCoordinator {
     public static let processInterval: TimeInterval = 5.0
     public static let batteryInterval: TimeInterval = 30.0
     public static let walCheckpointInterval: TimeInterval = 300.0
+    public static let partialWindowFlushInterval: TimeInterval = 15.0
 
     private let database: HistoryDatabase
     private let processSampler: ProcessSampler
@@ -20,6 +21,7 @@ public actor SamplingCoordinator {
     private var batteryTask: Task<Void, Never>?
     private var bucketTask: Task<Void, Never>?
     private var checkpointTask: Task<Void, Never>?
+    private var partialWindowFlushTask: Task<Void, Never>?
     private var isRunning = false
 
     /// Held to detect AC source / charging-state transitions so we can emit
@@ -69,6 +71,15 @@ public actor SamplingCoordinator {
             }
         }
 
+        partialWindowFlushTask = Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(Self.partialWindowFlushInterval * 1_000_000_000))
+                guard !Task.isCancelled else { break }
+                await self.flushPartialWindow()
+            }
+        }
+
         bucketTask = Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
             // Prime the bucket sampler so the first emitted row carries a real
@@ -81,22 +92,33 @@ public actor SamplingCoordinator {
         }
     }
 
-    public func stop() async {
-        let tasks = [processTask, batteryTask, bucketTask, checkpointTask]
+    public func stop() async -> Bool {
+        let tasks = [processTask, batteryTask, bucketTask, checkpointTask, partialWindowFlushTask]
         tasks.forEach { $0?.cancel() }
         for task in tasks { await task?.value }
         processTask = nil
         batteryTask = nil
         bucketTask = nil
         checkpointTask = nil
+        partialWindowFlushTask = nil
         isRunning = false
         do { try await database.flushPendingWindow() }
-        catch { logError("History window flush failed during shutdown: \(error)") }
+        catch {
+            logError("History window flush failed during shutdown: \(error)")
+            return false
+        }
+        return true
     }
 
     public func recordEvent(_ event: PowerEvent) async {
+        if event.type == .sleep { await flushPartialWindow() }
         do { try await database.writePowerEvent(event) }
         catch { logError("PowerEvent insert failed: \(error)") }
+    }
+
+    private func flushPartialWindow() async {
+        do { try await database.flushPendingWindow() }
+        catch { logError("History window flush failed: \(error)") }
     }
 
     @discardableResult

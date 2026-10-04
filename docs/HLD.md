@@ -217,8 +217,10 @@ Populated only when helper is installed. Contains powermetrics-derived joule rat
    The current parent PID and `pbi_comm` are read for each process every tick.
    Path, bundle, process-name, and resolved app-identity metadata is cached by
    `(pid, ri_proc_start_abstime)` while `pbi_comm` is unchanged, capped at 4,096
-   entries, and pruned for processes that are no longer readable in the current
-   scan. A changed `pbi_comm` invalidates and re-resolves the cached identity.
+   entries, and pruned when a process has neither a readable snapshot nor a
+   retained counter baseline. Metadata follows baselines through their two-scan
+   transient-read grace period. A changed `pbi_comm` invalidates and re-resolves
+   the cached identity.
 2. Reuse cached app identity, convert CPU counters from Mach timebase ticks to
    nanoseconds, and calculate `ri_energy_nj` deltas. First observations establish
    baselines; rows without energy are retained only when CPU energy is
@@ -229,9 +231,14 @@ Populated only when helper is installed. Contains powermetrics-derived joule rat
    stored process/PID rows with the window-start timestamp and counters summed
    across the underlying process ticks. Each flush resolves a distinct app
    group once, then reuses its ID for that group's process rows. Flush on window
-   change, maintenance, or shutdown;
-   `Coverage` records the last scan in each window. A partial final window is
-   persisted as-is.
+   change, maintenance, sleep, shutdown, and every 15 seconds so an open window
+   has a bounded crash-loss interval;
+   `Coverage` records the last scan in each window. Failed transactions remain
+   queued in order and retry on the next flush. The queue holds at most eight
+   completed windows; when full, the writer rejects a further boundary change
+   without clearing the active window. Shutdown only proceeds after the final
+   flush succeeds; on failure sampling resumes and termination is cancelled so
+   the queued batch can be retried. A partial final window is persisted as-is.
 4. The existing five-minute checkpoint timer runs the maintenance phases:
    minute rollup, hour rollup, retention pruning, and bounded incremental vacuum.
    It then requests an out-of-transaction `wal_checkpoint(TRUNCATE)` so the

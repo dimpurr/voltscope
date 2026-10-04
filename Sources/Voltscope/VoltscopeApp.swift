@@ -262,11 +262,18 @@ final class AppState: ObservableObject {
         }
     }
 
-    func stopSamplingForTermination() async {
+    func stopSamplingForTermination() async -> Bool {
         refreshTask?.cancel()
         refreshTask = nil
-        if let coordinator { await coordinator.stop() }
-        coordinator = nil
+        guard let coordinator else { return true }
+        if await coordinator.stop() {
+            self.coordinator = nil
+            return true
+        }
+        statusText = "History flush failed; sampling resumed"
+        await coordinator.start()
+        startRefreshLoop()
+        return false
     }
 
     func refreshNow() async {
