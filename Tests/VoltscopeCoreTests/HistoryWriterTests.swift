@@ -89,6 +89,73 @@ final class HistoryWriterTests: XCTestCase {
         XCTAssertEqual(raw, 1)
     }
 
+    func testSleepInclusiveClockAdvancesRetentionCutoffAcrossSixteenHours() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let baselineMS = epoch(2026, 10, 3, 12)
+        let sampleMS = baselineMS - 36 * 60 * 60_000
+        let monotonicStart: TimeInterval = 5_000
+        try await db.dbPool.write { conn in
+            try conn.execute(sql: "INSERT OR REPLACE INTO Meta (key, value) VALUES ('settings.rawRetentionDays', '2')")
+        }
+        try await db.writeTick(timestamp: sampleMS,
+            apps: [SampledApp(groupKey: "sleep.clock", displayName: "Sleep Clock", pid: 9,
+                              energyNJ: 11, cpuNs: 20)],
+            buckets: [], coverage: SampleCoverage(visible: 1, unreadable: 0))
+        try await db.flushPendingWindow()
+        try await db.dbPool.write { conn in
+            try conn.execute(sql: "INSERT OR REPLACE INTO Meta (key, value) VALUES ('retention.safeWallClockMS', ?)",
+                             arguments: [String(baselineMS)])
+            try conn.execute(sql: "INSERT OR REPLACE INTO Meta (key, value) VALUES ('retention.safeMonotonicMS', ?)",
+                             arguments: [String(Int64(monotonicStart * 1000))])
+        }
+
+        try await db.pruneHistory(now: Date(timeIntervalSince1970: Double(baselineMS) / 1000),
+                                  monotonicNow: monotonicStart)
+        let afterSleepMS = baselineMS + 16 * 60 * 60_000
+        try await db.pruneHistory(now: Date(timeIntervalSince1970: Double(afterSleepMS) / 1000),
+                                  monotonicNow: monotonicStart + 16 * 60 * 60)
+
+        let raw = try await db.dbPool.read { conn in
+            try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE ts = ?", arguments: [sampleMS]) ?? 0
+        }
+        let safeNow = try await db.dbPool.read { conn in
+            try Int64.fetchOne(conn, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key = 'retention.safeWallClockMS'")
+        }
+        XCTAssertEqual(raw, 0, "16 hours of sleep-inclusive elapsed time should advance the two-day raw cutoff")
+        XCTAssertEqual(safeNow, afterSleepMS)
+    }
+
+    func testRebootedMonotonicClockReanchorsToHistoryWithoutEarlyPruning() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let sampleMS = epoch(2026, 10, 1, 12)
+        let previousSafeMS = sampleMS + 4 * 86_400_000
+        try await db.dbPool.write { conn in
+            try conn.execute(sql: "INSERT OR REPLACE INTO Meta (key, value) VALUES ('settings.rawRetentionDays', '2')")
+        }
+        try await db.writeTick(timestamp: sampleMS,
+            apps: [SampledApp(groupKey: "reboot.clock", displayName: "Reboot Clock", pid: 10,
+                              energyNJ: 13, cpuNs: 24)],
+            buckets: [], coverage: SampleCoverage(visible: 1, unreadable: 0))
+        try await db.flushPendingWindow()
+        try await db.dbPool.write { conn in
+            try conn.execute(sql: "INSERT OR REPLACE INTO Meta (key, value) VALUES ('retention.safeWallClockMS', ?)",
+                             arguments: [String(previousSafeMS)])
+            try conn.execute(sql: "INSERT OR REPLACE INTO Meta (key, value) VALUES ('retention.safeMonotonicMS', '604800000')")
+        }
+
+        let nowMS = sampleMS + 4 * 86_400_000
+        try await db.pruneHistory(now: Date(timeIntervalSince1970: Double(nowMS) / 1000), monotonicNow: 1)
+
+        let raw = try await db.dbPool.read { conn in
+            try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE ts = ?", arguments: [sampleMS]) ?? 0
+        }
+        let safeNow = try await db.dbPool.read { conn in
+            try Int64.fetchOne(conn, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key = 'retention.safeWallClockMS'")
+        }
+        XCTAssertEqual(raw, 1, "reboot re-anchoring must not use the previous boot's advanced cutoff")
+        XCTAssertEqual(safeNow, sampleMS + 5 * 60_000)
+    }
+
     func testSevenDayQueryIncludesSummarizedLeftEdgeHourAfterRawPrune() async throws {
         let db = try HistoryDatabase.makeInMemory()
         let start = epoch(2026, 10, 3, 12, 30)

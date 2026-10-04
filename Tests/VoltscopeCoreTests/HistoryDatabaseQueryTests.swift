@@ -275,9 +275,10 @@ final class HistoryDatabaseQueryTests: XCTestCase {
             if range == .d7 {
                 let nonAlignedStart = start + 30 * 60_000
                 let partialWindow = try await db.historyEnergy(in: self.interval(nonAlignedStart, end), range: range)
-                let partialFixtures = currentFixtures.filter { $0.ts >= nonAlignedStart }
+                let leftEdgeHour = nonAlignedStart / 3_600_000
+                let partialFixtures = currentFixtures.filter { $0.ts / 3_600_000 >= leftEdgeHour }
                 XCTAssertEqual(partialWindow, expectedEnergy(partialFixtures, range: range, version: EnergyMetric.currentVersion),
-                               "7D query beginning off the hour includes only in-window rows")
+                               "7D query beginning off the hour includes its whole left-edge hour")
             }
         }
     }
@@ -363,8 +364,8 @@ final class HistoryDatabaseQueryTests: XCTestCase {
         XCTAssertEqual(sevenDay.reduce(Int64(0)) { $0 + $1.energyNJ }, 26)
         XCTAssertEqual(sevenDay.reduce(Int64(0)) { $0 + ($1.cpuNS ?? 0) }, 260)
         let nonAlignedSevenDay = try await db.historyEnergy(in: self.interval(rawCutoff + 30 * 60_000, nowMS), range: .d7)
-        XCTAssertEqual(nonAlignedSevenDay.reduce(Int64(0)) { $0 + $1.energyNJ }, 23,
-                       "a 7D query starting off the hour excludes earlier data")
+        XCTAssertEqual(nonAlignedSevenDay.reduce(Int64(0)) { $0 + $1.energyNJ }, 26,
+                       "a 7D query starting off the hour includes its summarized left-edge hour")
 
         let oldHours = try await db.dbPool.read { conn in
             try Int64.fetchOne(conn, sql: "SELECT COALESCE(SUM(energyNJ), 0) FROM AppUsageHour WHERE hour < ?", arguments: [nowMS / 3_600_000 - 48]) ?? 0

@@ -1,5 +1,18 @@
 import Foundation
+import Darwin
 import GRDB
+
+private let continuousClockTimebase: mach_timebase_info_data_t = {
+    var timebase = mach_timebase_info_data_t()
+    mach_timebase_info(&timebase)
+    return timebase
+}()
+
+private func continuousClockSeconds() -> TimeInterval {
+    let nanoseconds = Double(mach_continuous_time())
+        * Double(continuousClockTimebase.numer) / Double(continuousClockTimebase.denom)
+    return nanoseconds / 1_000_000_000
+}
 
 private struct WindowAppKey: Hashable {
     let groupKey: String
@@ -297,11 +310,11 @@ public extension HistoryDatabase {
 
     /// Runs each maintenance phase in its own transaction. The injected date
     /// keeps cutoff behavior deterministic in tests.
-    func runMaintenance(now: Date = Date(), monotonicNow: TimeInterval = ProcessInfo.processInfo.systemUptime) async throws {
+    func runMaintenance(now: Date = Date(), monotonicNow: TimeInterval? = nil) async throws {
         try await flushPendingWindow()
         try await rollupMinutes(now: now)
         try await rollupHours(now: now)
-        try await pruneHistory(now: now, monotonicNow: monotonicNow)
+        try await pruneHistory(now: now, monotonicNow: monotonicNow ?? continuousClockSeconds())
         try await incrementalVacuum()
     }
 
@@ -412,26 +425,29 @@ public extension HistoryDatabase {
     }
 
     /// Applies raw and minute retention while preserving all hour summaries.
-    func pruneHistory(now: Date = Date(), monotonicNow: TimeInterval = ProcessInfo.processInfo.systemUptime) async throws {
+    func pruneHistory(now: Date = Date(), monotonicNow: TimeInterval? = nil) async throws {
         let nowMS = Int64(now.timeIntervalSince1970 * 1000)
-        let monotonicMS = Int64(monotonicNow * 1000)
+        let monotonicMS = Int64((monotonicNow ?? continuousClockSeconds()) * 1000)
         try await dbPool.write { db in
             let previousSafeMS = try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key = 'retention.safeWallClockMS'")
             let previousMonotonicMS = try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key = 'retention.safeMonotonicMS'")
             let safeNowMS: Int64
             if let previousSafeMS, let previousMonotonicMS {
-                let elapsed = max(0, monotonicMS - previousMonotonicMS)
-                safeNowMS = min(nowMS, previousSafeMS + elapsed)
-            } else if let latestHistoryMS = try Int64.fetchOne(db, sql: """
-                SELECT MAX(timestampMS) FROM (
-                    SELECT MAX(ts) AS timestampMS FROM AppSampleRaw
-                    UNION ALL SELECT MAX(ts) FROM BucketSampleRaw
-                    UNION ALL SELECT MAX(hour * 3600000) FROM AppUsageHour
-                    UNION ALL SELECT MAX(hour * 3600000) FROM BucketHour
-                )
-                """) {
+                if monotonicMS >= previousMonotonicMS {
+                    let elapsed = monotonicMS - previousMonotonicMS
+                    safeNowMS = min(nowMS, previousSafeMS + elapsed)
+                } else if let latestHistoryMS = try Self.latestHistoryTimestampMS(db) {
+                    // A reboot resets the continuous clock. Re-anchor from
+                    // stored history so downtime is not mistaken for elapsed
+                    // monotonic time and a wall-clock jump cannot prune ahead.
+                    safeNowMS = min(nowMS, latestHistoryMS + 5 * 60_000)
+                } else {
+                    safeNowMS = min(nowMS, previousSafeMS)
+                }
+            } else if let latestHistoryMS = try Self.latestHistoryTimestampMS(db) {
                 // Establish a conservative anchor on upgrades and after an
-                // unrecorded clock jump. Subsequent runs advance by uptime.
+                // unrecorded clock jump. Subsequent runs advance by the
+                // sleep-inclusive continuous clock.
                 safeNowMS = min(nowMS, latestHistoryMS + 5 * 60_000)
             } else {
                 safeNowMS = nowMS
@@ -450,6 +466,17 @@ public extension HistoryDatabase {
             try Self.setWatermark(db, key: "retention.safeWallClockMS", value: safeNowMS)
             try Self.setWatermark(db, key: "retention.safeMonotonicMS", value: monotonicMS)
         }
+    }
+
+    private static func latestHistoryTimestampMS(_ db: Database) throws -> Int64? {
+        try Int64.fetchOne(db, sql: """
+                SELECT MAX(timestampMS) FROM (
+                    SELECT MAX(ts) AS timestampMS FROM AppSampleRaw
+                    UNION ALL SELECT MAX(ts) FROM BucketSampleRaw
+                    UNION ALL SELECT MAX(hour * 3600000) FROM AppUsageHour
+                    UNION ALL SELECT MAX(hour * 3600000) FROM BucketHour
+                )
+                """)
     }
 
     /// Asks SQLite to reclaim a bounded number of pages in incremental mode.
