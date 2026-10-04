@@ -179,6 +179,25 @@ private final class LegacyLateWriter: @unchecked Sendable {
             lock.lock(); lastError = error; lock.unlock()
         }
     }
+
+    func commitClockRollback(energyNJ: Int64) {
+        lock.lock()
+        let pid = Int32(900 + inserted)
+        lock.unlock()
+        do {
+            try writer.write { db in
+                var sample = EnergySample(timestamp: base, pid: pid, bundleIdentifier: "com.test.rollback",
+                                          processName: "Rollback", path: nil, parentPid: nil,
+                                          cpuUserNs: 1, cpuSystemNs: 1, energyNJ: energyNJ,
+                                          wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0,
+                                          year: 2023, month: 11, day: 14, hour: 12, minute: 0)
+                try sample.insert(db)
+            }
+            lock.lock(); inserted += 1; lock.unlock()
+        } catch {
+            lock.lock(); lastError = error; lock.unlock()
+        }
+    }
 }
 
 private struct ImportTotals {
@@ -703,6 +722,40 @@ final class LegacyDatabaseImporterTests: XCTestCase {
             try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'")
         }
         XCTAssertEqual(resumedState, "done")
+        withExtendedLifetime(walWriter) {}
+    }
+
+    func testClockRollbackCommitsDuringVerificationStayWithinRoundBudget() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        let walWriter = try makeWALWriter(at: legacyURL)
+        let base: Int64 = 1_700_000_000_000 + 12 * 3_600_000
+        let late = LegacyLateWriter(writer: walWriter, base: base)
+        let history = try makeHistory()
+        let importer = LegacyDatabaseImporter(
+            history: history,
+            legacyURL: legacyURL,
+            timebase: LegacyTimebase(numer: 1, denom: 1),
+            progress: { progress in
+                if progress.importedHours == 1 {
+                    late.commitClockRollback(energyNJ: 1_000 + Int64(late.inserted))
+                }
+            })
+
+        try await importer.run()
+
+        let stateAndCursor = try await history.dbPool.read { db in
+            (try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'"),
+             try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key='legacy.cursorHour'"))
+        }
+        XCTAssertLessThanOrEqual(late.inserted, 10,
+                                 "revision-change verification retries must stop at the convergence-round budget")
+        XCTAssertGreaterThan(late.inserted, 0)
+        XCTAssertNil(late.lastError)
+        XCTAssertEqual(stateAndCursor.0, "verifying")
+        XCTAssertEqual(stateAndCursor.1, (base / 3_600_000) - 1,
+                       "the persisted cursor must remain before the first hour so the next launch rescans it")
         withExtendedLifetime(walWriter) {}
     }
 
@@ -1379,6 +1432,33 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         try await history.setRawRetentionDays(30)
         let expiry = doneAt.addingTimeInterval(7 * 86_400)
         let deleted = try await history.deleteLegacyDatabaseIfExpired(at: legacyURL, now: expiry)
+        XCTAssertTrue(deleted)
+        let status = try await history.importStatus()
+        XCTAssertEqual(status.state, .done)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyURL.path))
+        let verifiedAt = try await history.dbPool.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.verifiedAt'")
+        }
+        XCTAssertNotNil(verifiedAt)
+    }
+
+    func testOldCompletedImportWithoutRawCutoffStaysDoneAfterRetentionIncrease() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 30)
+        let history = try makeHistory()
+        let doneAt = legacyFixtureNow(days: 30)
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                         timebase: LegacyTimebase(numer: 1, denom: 1),
+                                         now: { doneAt }, rawRetentionDays: 7).run()
+        try await history.dbPool.write { db in
+            try db.execute(sql: "DELETE FROM Meta WHERE key='legacy.rawCutoff'")
+        }
+        try await history.setRawRetentionDays(30)
+
+        let expiry = doneAt.addingTimeInterval(7 * 86_400)
+        let deleted = try await history.deleteLegacyDatabaseIfExpired(at: legacyURL, now: expiry)
+
         XCTAssertTrue(deleted)
         let status = try await history.importStatus()
         XCTAssertEqual(status.state, .done)

@@ -176,10 +176,15 @@ as a background task. It reads the source in read-only, hour-sized transactions
 and records a resumable cursor. Before marking migration complete, it verifies
 energy and battery counts and checks both the newest source timestamp and the
 SQLite source revision; a changed source revision restarts the hour scan so
-commits with earlier timestamps are included. A completed source is eligible
-for automatic deletion seven days after completion; Settings also offers
-immediate deletion only after verification succeeds. A failed import keeps the
-source file and the app continues on the new store.
+commits with earlier timestamps are included. Convergence is bounded to ten
+rounds per launch; if the source keeps changing, migration remains `verifying`
+with a resumable cursor for the next launch. A completed import records the raw
+verification cutoff. Older completed records without that cutoff still verify
+permanent summaries and counts, while skipping raw-tier comparison because the
+original retention window cannot be reconstructed. A completed source is
+eligible for automatic deletion seven days after completion; Settings also
+offers immediate deletion only after verification succeeds. A failed import
+keeps the source file and the app continues on the new store.
 
 ### `EnergyBaseline` (v1.5)
 

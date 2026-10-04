@@ -4,6 +4,8 @@
 
 - Recheck the legacy SQLite source revision during import convergence so
   timestamp rollback commits are rescanned before completion.
+- Bound revision-change verification retries to ten rounds per launch, and keep
+  completed legacy imports verifiable when older records lack a raw cutoff.
 - Limit CSV energy rows to the current metric version, matching chart totals.
 - Refresh process identity metadata when `pbi_comm` changes, and read each
   process's current parent PID on every sampling tick.
