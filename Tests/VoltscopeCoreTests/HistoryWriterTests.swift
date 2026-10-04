@@ -69,6 +69,30 @@ final class HistoryWriterTests: XCTestCase {
         XCTAssertEqual(hourlyResult.reduce(Int64(0)) { $0 + $1.energyNJ }, 15)
     }
 
+    func testLateCoverageAfterHourRollupUpdatesCoverageHour() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let first = epoch(2026, 1, 2, 3, 10)
+        try await db.writeTick(timestamp: first, apps: [], buckets: [],
+                               coverage: SampleCoverage(visible: 1, unreadable: 0))
+        try await db.flushPendingWindow()
+        try await db.runMaintenance(now: Date(timeIntervalSince1970: Double(first + 2 * 60 * 60_000) / 1000))
+
+        try await db.writeTick(timestamp: first + 30_000, apps: [], buckets: [],
+                               coverage: SampleCoverage(visible: 9, unreadable: 2))
+        try await db.flushPendingWindow()
+        try await db.writeTick(timestamp: first + 30_000, apps: [], buckets: [],
+                               coverage: SampleCoverage(visible: 4, unreadable: 1))
+        try await db.flushPendingWindow()
+
+        let row = try db.dbPool.read { conn in
+            return try Row.fetchOne(conn, sql: "SELECT ticks, visibleSum, unreadableSum FROM CoverageHour WHERE hour = ?",
+                                    arguments: [first / 3_600_000])
+        }
+        XCTAssertEqual(row?["ticks"] as Int64?, 2)
+        XCTAssertEqual(row?["visibleSum"] as Int64?, 5, "replacing a timestamp adjusts sums without adding a tick")
+        XCTAssertEqual(row?["unreadableSum"] as Int64?, 1)
+    }
+
     func testClockJumpForwardDoesNotPruneRawHistoryEarly() async throws {
         let db = try HistoryDatabase.makeInMemory()
         let timestamp = epoch(2026, 10, 3, 12)
@@ -156,33 +180,40 @@ final class HistoryWriterTests: XCTestCase {
         XCTAssertEqual(safeNow, sampleMS + 5 * 60_000)
     }
 
-    func testSevenDayQueryIncludesSummarizedLeftEdgeHourAfterRawPrune() async throws {
+    func testSevenDayQueryExcludesPartialLeftHourAfterRawPrune() async throws {
         let db = try HistoryDatabase.makeInMemory()
         let start = epoch(2026, 10, 3, 12, 30)
-        let sample = start + 15 * 60_000
+        let outOfRangeSample = start - 15 * 60_000
+        let inRangeSample = start + 15 * 60_000
+        let firstCompleteHourSample = start + 45 * 60_000
         try await db.dbPool.write { conn in
             try conn.execute(sql: "INSERT OR REPLACE INTO Meta (key, value) VALUES ('settings.rawRetentionDays', '2')")
         }
-        try await db.writeTick(timestamp: sample,
-            apps: [SampledApp(groupKey: "edge.app", bundleIdentifier: "edge.app", displayName: "Edge",
-                              pid: 8, energyNJ: 10, cpuNs: 20)], buckets: [],
-            coverage: SampleCoverage(visible: 1, unreadable: 0))
+        for (timestamp, pid) in [(outOfRangeSample, Int32(7)), (inRangeSample, Int32(8)),
+                                 (firstCompleteHourSample, Int32(9))] {
+            try await db.writeTick(timestamp: timestamp,
+                apps: [SampledApp(groupKey: "edge.app", bundleIdentifier: "edge.app", displayName: "Edge",
+                                  pid: pid, energyNJ: 10, cpuNs: 20)], buckets: [],
+                coverage: SampleCoverage(visible: 1, unreadable: 0))
+        }
         try await db.flushPendingWindow()
         let monotonicStart: TimeInterval = 1_000
-        try await db.runMaintenance(now: Date(timeIntervalSince1970: Double(sample + 2 * 60 * 60_000) / 1000),
+        try await db.runMaintenance(now: Date(timeIntervalSince1970: Double(inRangeSample + 2 * 60 * 60_000) / 1000),
                                     monotonicNow: monotonicStart)
         let end = start + 7 * 86_400_000
         try await db.runMaintenance(now: Date(timeIntervalSince1970: Double(end) / 1000),
                                     monotonicNow: monotonicStart + 7 * 86_400)
 
         let rawRows = try await db.dbPool.read { conn in
-            try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE ts = ?", arguments: [sample]) ?? 0
+            try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE ts IN (?, ?, ?)",
+                             arguments: [outOfRangeSample, inRangeSample, firstCompleteHourSample]) ?? 0
         }
         XCTAssertEqual(rawRows, 0, "the fixture must exercise the expired-raw path")
 
         let result = try await db.historyEnergy(in: DateInterval(start: Date(timeIntervalSince1970: Double(start) / 1000),
                                                                  end: Date(timeIntervalSince1970: Double(end) / 1000)), range: .d7)
-        XCTAssertEqual(result.reduce(Int64(0)) { $0 + $1.energyNJ }, 10)
+        XCTAssertEqual(result.reduce(Int64(0)) { $0 + $1.energyNJ }, 10,
+                       "the partial 12:00 hour is excluded; hourly summaries from 13:00 onward remain in range")
     }
 
     func testWindowFlushKeepsSeparatePIDsUnderOneApp() async throws {

@@ -118,6 +118,10 @@ public final class ProcessSampler: @unchecked Sendable {
         return parts.count == 2 && parts[0] == "pid" && Int32(parts[1]) != nil
     }
 
+    static func processStartMatches(_ expected: UInt64, _ observed: UInt64) -> Bool {
+        expected == observed
+    }
+
     private var metadataCache = MetadataCache<MetadataKey, ProcessMetadata>()
 
     private var previous: [ProcessKey: ProcessSnapshot] = [:]
@@ -374,6 +378,16 @@ public final class ProcessSampler: @unchecked Sendable {
                                                        processName: identity.name, path: identity.path)
             return ProcessMetadata(comm: comm ?? identity.name, name: identity.name, path: identity.path,
                                    bundleId: identity.bundleId, resolvedIdentity: resolvedIdentity)
+        }
+        var verifiedInfo = rusage_info_v6()
+        guard voltscope_proc_pid_rusage_v6(pid, &verifiedInfo) == 0 else {
+            errorNumber = errno
+            metadataCache.removeValue(for: metadataKey)
+            return nil
+        }
+        guard Self.processStartMatches(info.ri_proc_start_abstime, verifiedInfo.ri_proc_start_abstime) else {
+            metadataCache.removeValue(for: metadataKey)
+            return nil
         }
         let metadata = tickMetadata.process
 

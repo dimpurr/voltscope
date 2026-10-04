@@ -102,6 +102,9 @@ for new samples.
   `Coverage` stores the last scan's visible/unreadable counts per window and is
   pruned with raw history. Canonical hardware bucket names are defined in
   [ENERGY_MODEL.md](ENERGY_MODEL.md#current-sampler-metric-contract).
+- CSV `app_name` and `app_path` are metadata from the joined App group row; they
+  identify the app grouping, not per-PID process identity. The CSV column names
+  describe that scope explicitly.
 - `AppUsageMinute` / `BucketMinute` are retained for 2 days. `AppUsageHour` /
   `BucketHour` and `CoverageHour` are retained indefinitely. Rollups preserve
   metric versions and replace recomputed rows idempotently.

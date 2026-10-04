@@ -275,10 +275,9 @@ final class HistoryDatabaseQueryTests: XCTestCase {
             if range == .d7 {
                 let nonAlignedStart = start + 30 * 60_000
                 let partialWindow = try await db.historyEnergy(in: self.interval(nonAlignedStart, end), range: range)
-                let leftEdgeHour = nonAlignedStart / 3_600_000
-                let partialFixtures = currentFixtures.filter { $0.ts / 3_600_000 >= leftEdgeHour }
+                let partialFixtures = currentFixtures.filter { $0.ts >= nonAlignedStart }
                 XCTAssertEqual(partialWindow, expectedEnergy(partialFixtures, range: range, version: EnergyMetric.currentVersion),
-                               "7D query beginning off the hour includes its whole left-edge hour")
+                               "7D query beginning off the hour excludes its partial left-edge hour")
             }
         }
     }
@@ -364,8 +363,8 @@ final class HistoryDatabaseQueryTests: XCTestCase {
         XCTAssertEqual(sevenDay.reduce(Int64(0)) { $0 + $1.energyNJ }, 26)
         XCTAssertEqual(sevenDay.reduce(Int64(0)) { $0 + ($1.cpuNS ?? 0) }, 260)
         let nonAlignedSevenDay = try await db.historyEnergy(in: self.interval(rawCutoff + 30 * 60_000, nowMS), range: .d7)
-        XCTAssertEqual(nonAlignedSevenDay.reduce(Int64(0)) { $0 + $1.energyNJ }, 26,
-                       "a 7D query starting off the hour includes its summarized left-edge hour")
+        XCTAssertEqual(nonAlignedSevenDay.reduce(Int64(0)) { $0 + $1.energyNJ }, 23,
+                       "a 7D query starting off the hour excludes its partial summarized left-edge hour")
 
         let oldHours = try await db.dbPool.read { conn in
             try Int64.fetchOne(conn, sql: "SELECT COALESCE(SUM(energyNJ), 0) FROM AppUsageHour WHERE hour < ?", arguments: [nowMS / 3_600_000 - 48]) ?? 0
@@ -595,9 +594,9 @@ final class HistoryDatabaseQueryTests: XCTestCase {
         XCTAssertEqual(events.map(\.timestamp), [5_000, 12_000])
     }
 
-    func testCSVQueryReturnsRawDetailColumnsFromAppDictionary() async throws {
+    func testCSVQueryLabelsJoinedGroupMetadataAsAppMetadata() async throws {
         XCTAssertEqual(HistoryDatabase.CSVSample.columnNames, [
-            "timestamp_ms", "iso8601", "pid", "parent_pid", "bundle_id", "process_name", "path",
+            "timestamp_ms", "iso8601", "pid", "parent_pid", "bundle_id", "app_name", "app_path",
             "cpu_ns", "energy_nj", "wakeups", "disk_read_bytes", "disk_write_bytes", "metric_version"
         ])
         let (db, raw, end) = try await fixture(.live)
@@ -621,6 +620,17 @@ final class HistoryDatabaseQueryTests: XCTestCase {
 
         let exportedLine = sample.csvLine(iso8601: "1970-01-01T00:00:00.000Z")
         XCTAssertEqual(Array(exportedLine.utf8), Array("0,1970-01-01T00:00:00.000Z,11,,com.example.alpha,Alpha,/Apps/Alpha.app,14,7,1,21,28,1\n".utf8))
+
+        let appID = try XCTUnwrap(raw.first?.appId)
+        try await db.dbPool.write { conn in
+            try AppSampleRaw(ts: 0, appId: appID, pid: 99, parentPid: nil,
+                             metricVersion: EnergyMetric.currentVersion, energyNJ: 2, cpuNs: 3,
+                             wakeups: 0, diskReadBytes: 0, diskWriteBytes: 0).insert(conn)
+        }
+        let sharedGroupRows = try await db.historySamplesForCSV(in: interval(0, 1))
+        XCTAssertEqual(sharedGroupRows.map(\.pid), [11, 99])
+        XCTAssertTrue(sharedGroupRows.allSatisfy { $0.processName == "Alpha" && $0.path == "/Apps/Alpha.app" },
+                      "app_name and app_path describe the joined App group metadata for every PID row")
     }
 
     func testCSVDefaultEnergyTotalUsesOnlyTheChartMetricVersion() async throws {

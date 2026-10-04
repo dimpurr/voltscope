@@ -51,6 +51,13 @@ A residual is always allowed. Hardware channels can overlap, and a process
 proxy cannot explain every system or sleep cost. The UI must label unknown or
 unattributed energy instead of silently turning an estimate into a measurement.
 
+The 7-day history query uses hourly summaries. When its left boundary falls
+inside an hour whose raw and minute rows have expired, that partial hour is
+excluded rather than including energy from before the requested interval. This
+avoids overcounting out-of-range energy; it can omit the in-range portion of
+that boundary hour because permanent hourly summaries do not retain its
+intra-hour distribution.
+
 ## 4. macOS API surface — what is reachable
 
 | Signal | API | Public? | Root? | Per-process? |

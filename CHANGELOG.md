@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Label CSV group metadata as `app_name` and `app_path` so exports do not imply
+  those values identify each PID's process.
+- Repair hourly coverage totals when late or replacement coverage rows arrive
+  after the hour rollup watermark.
+- Exclude a partially overlapping left-edge hour from 7-day summaries after
+  finer-grained rows expire, avoiding out-of-range energy in the result.
+- Recheck process start time after identity lookup and discard snapshots if a
+  PID was reused during the read.
+
 ## 0.10.1 — 2026-10-04
 
 - Recheck the legacy SQLite source revision during import convergence so

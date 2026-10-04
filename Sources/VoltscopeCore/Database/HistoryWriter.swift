@@ -303,8 +303,22 @@ public extension HistoryDatabase {
                                                       version: key.version, energyNJ: energy)
                 }
             }
+            let previousCoverage = try Coverage.fetchOne(db, key: batch.start)
             try Coverage(ts: batch.start, visible: batch.coverage.visible, unreadable: batch.coverage.unreadable)
                 .insert(db, onConflict: .replace)
+            let coverageHour = batch.start / 3_600_000
+            if coverageHour <= (try Self.watermark(db, key: "rollup.hourWatermark")) {
+                try db.execute(sql: """
+                    INSERT INTO CoverageHour (hour, ticks, visibleSum, unreadableSum)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(hour) DO UPDATE SET
+                        ticks=ticks+excluded.ticks,
+                        visibleSum=visibleSum+excluded.visibleSum,
+                        unreadableSum=unreadableSum+excluded.unreadableSum
+                    """, arguments: [coverageHour, previousCoverage == nil ? 1 : 0,
+                                    batch.coverage.visible - (previousCoverage?.visible ?? 0),
+                                    batch.coverage.unreadable - (previousCoverage?.unreadable ?? 0)])
+            }
         }
     }
 

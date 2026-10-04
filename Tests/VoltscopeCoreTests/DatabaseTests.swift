@@ -103,6 +103,12 @@ final class BatteryConditionTests: XCTestCase {
 }
 
 final class ProcessSamplerTests: XCTestCase {
+    func testProcessStartVerificationRejectsPIDReuseDuringIdentityLookup() {
+        XCTAssertFalse(ProcessSampler.processStartMatches(7, 8),
+                       "a changed proc start time means the PID now names a different process")
+        XCTAssertTrue(ProcessSampler.processStartMatches(7, 7))
+    }
+
     func testMetadataCacheSeparatesPIDReuseAndPrunesExitedProcesses() {
         typealias Cache = ProcessSampler.MetadataCache<ProcessSampler.MetadataKey, ProcessSampler.ProcessMetadata>
         let firstKey = ProcessSampler.MetadataKey(pid: 42, startAbstime: 100)

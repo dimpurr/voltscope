@@ -165,9 +165,10 @@ extension HistoryDatabase {
         public let bucketStarts: [Date]
     }
 
-    /// One raw row with the public CSV column set.
+    /// One raw row. `processName` and `path` carry joined App-group metadata,
+    /// exported as `app_name` and `app_path` rather than per-PID identity.
     public struct CSVSample: Sendable, Equatable {
-        public static let columnNames = ["timestamp_ms", "iso8601", "pid", "parent_pid", "bundle_id", "process_name", "path", "cpu_ns", "energy_nj", "wakeups", "disk_read_bytes", "disk_write_bytes", "metric_version"]
+        public static let columnNames = ["timestamp_ms", "iso8601", "pid", "parent_pid", "bundle_id", "app_name", "app_path", "cpu_ns", "energy_nj", "wakeups", "disk_read_bytes", "disk_write_bytes", "metric_version"]
         public let timestampMS: Int64
         public let iso8601: String
         public let pid: Int32
@@ -442,7 +443,7 @@ private extension HistoryDatabase {
     static func queryArguments(start: Int64, end: Int64, width: Int64, metricVersion: Int, watermark: Int64?, range: HistoryRange) -> StatementArguments {
         let unitMS: Int64 = range == .d7 ? 3_600_000 : 60_000
         let cutoff = watermark.map { ($0 + 1) * unitMS } ?? start
-        let tierStart = range == .d7 ? (start / unitMS) * unitMS : ((start + unitMS - 1) / unitMS) * unitMS
+        let tierStart = ((start + unitMS - 1) / unitMS) * unitMS
         let tierEnd = (end / unitMS) * unitMS
         return [width, width, tierStart, tierEnd, Int64(metricVersion),
                 width, width, start, end, Int64(metricVersion), cutoff, tierStart, tierEnd]
@@ -451,7 +452,7 @@ private extension HistoryDatabase {
     static func coverageArguments(start: Int64, end: Int64, width: Int64, version: Int, watermark: Int64?, range: HistoryRange) -> StatementArguments {
         let unitMS: Int64 = range == .d7 ? 3_600_000 : 60_000
         let cutoff = watermark.map { ($0 + 1) * unitMS } ?? start
-        let tierStart = range == .d7 ? (start / unitMS) * unitMS : ((start + unitMS - 1) / unitMS) * unitMS
+        let tierStart = ((start + unitMS - 1) / unitMS) * unitMS
         let tierEnd = (end / unitMS) * unitMS
         return [width, width, tierStart, tierEnd, Int64(version),
                 width, width, start, end, Int64(version), cutoff, tierStart, tierEnd]
