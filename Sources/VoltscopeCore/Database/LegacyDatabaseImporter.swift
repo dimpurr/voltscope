@@ -183,25 +183,6 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         Task.detached(priority: .utility) { try await self.run() }
     }
 
-    /// Returns whether a completed import's source revision changed after its
-    /// completion marker was committed.
-    func completedSourceRevisionChanged() async throws -> Bool {
-        guard FileManager.default.fileExists(atPath: legacyURL.path) else { return false }
-        var configuration = Configuration()
-        configuration.readonly = true
-        configuration.busyMode = .timeout(5.0)
-        let source = try DatabaseQueue(path: legacyURL.path, configuration: configuration)
-        let current = try Self.readSourceRevision(source)
-        let savedDataVersion = try await history.dbPool.read { db in
-            try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key='legacy.sourceRevision.dataVersion'")
-        }
-        let savedCounts = try await history.dbPool.read { db in
-            try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.sourceRevision.rowCounts'")
-        }
-        return savedDataVersion != current.dataVersion
-            || savedCounts != current.rowCounts.map(String.init).joined(separator: ",")
-    }
-
     /// Imports hour by hour. The cursor update commits with each hour's rows,
     /// making a cancelled or interrupted run safe to resume.
     public func run() async throws {
@@ -264,23 +245,12 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
                 throw LegacyImportError.emptyLegacyEnergyHistory
             }
             if savedState == LegacyImportState.done.rawValue {
-                let currentRevision = try Self.readSourceRevision(source)
-                let savedDataVersion = try await meta("legacy.sourceRevision.dataVersion").flatMap(Int64.init)
-                let savedCounts = try await meta("legacy.sourceRevision.rowCounts")
-                let currentCounts = currentRevision.rowCounts.map(String.init).joined(separator: ",")
-                if savedDataVersion == currentRevision.dataVersion, savedCounts == currentCounts {
-                    try await verifyCompletedImport(source: source, bounds: initialBounds)
-                    return
-                }
-                // A source commit can land after the final convergence check
-                // but before the destination done marker. Reopen the import
-                // and rescan from the first source hour on the next entry.
-                try await history.dbPool.write { db in
-                    try Self.putMeta(db, key: "legacy.state", value: LegacyImportState.importing.rawValue)
-                    try db.execute(sql: "DELETE FROM Meta WHERE key IN ('legacy.doneAt', 'legacy.deleteAfter', 'legacy.verifiedAt')")
-                    try Self.putMeta(db, key: "legacy.cursorHour", value: String(initialBounds.minHour - 1))
-                }
-                wasDone = false
+                // Completed imports are revalidated only by the expiry path,
+                // immediately before source deletion. Startup must not scan
+                // every source table to rediscover a revision that is already
+                // protected by the retained recovery copy.
+                try await verifyCompletedImport(source: source, bounds: initialBounds)
+                return
             }
             if savedState == nil || savedState == LegacyImportState.none.rawValue || savedState == LegacyImportState.failed.rawValue {
                 try await setMeta("legacy.state", value: LegacyImportState.pending.rawValue)
@@ -819,10 +789,9 @@ public extension HistoryDatabase {
         progress: (@Sendable (LegacyImportProgress) -> Void)? = nil
     ) async throws -> Task<Void, Error>? {
         guard FileManager.default.fileExists(atPath: legacyURL.path) else { return nil }
+        if try await importStatus().state == .done { return nil }
         let importer = LegacyDatabaseImporter(history: self, legacyURL: legacyURL,
                                               rawRetentionDays: rawRetentionDays, progress: progress)
-        if try await importStatus().state == .done,
-           ((try? await importer.completedSourceRevisionChanged()) ?? false) != true { return nil }
         return importer.start()
     }
 

@@ -63,6 +63,11 @@ private final class LockedCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var value = 0
 
+    var count: Int {
+        lock.lock(); defer { lock.unlock() }
+        return value
+    }
+
     func increment() -> Int {
         lock.lock(); defer { lock.unlock() }
         value += 1
@@ -806,7 +811,7 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         }
     }
 
-    func testCommitAfterFinalRevisionCheckIsDiscoveredByCompletedImportEntry() async throws {
+    func testCompletedImportStartupDefersSourceVerificationUntilExpiry() async throws {
         let dir = try directory()
         let legacyURL = dir.appendingPathComponent("db.sqlite")
         try makeLegacy(at: legacyURL, days: 1)
@@ -831,15 +836,20 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         }
         XCTAssertEqual(missedBeforeRecovery, 203)
 
-        let recovery = try await history.startLegacyImportIfNeeded(at: legacyURL)
-        XCTAssertNotNil(recovery, "a completed marker with a newer source revision must restart convergence")
-        try await recovery?.value
-        let recovered = try await history.dbPool.read { db in
-            (try Int64.fetchOne(db, sql: "SELECT SUM(energyNJ) FROM AppUsageHour WHERE metricVersion=0") ?? 0,
-             try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.state'"))
+        let startupWork = try await history.startLegacyImportIfNeeded(at: legacyURL)
+        XCTAssertNil(startupWork, "startup must not count every row in a completed source")
+        try await history.dbPool.write { db in
+            try db.execute(sql: "UPDATE Meta SET value='0' WHERE key='legacy.deleteAfter'")
         }
-        XCTAssertEqual(recovered.0, 212)
-        XCTAssertEqual(recovered.1, "done")
+        do {
+            _ = try await history.deleteLegacyDatabaseIfExpired(at: legacyURL, now: fixtureNow)
+            XCTFail("expiry verification must detect the source commit before deleting its recovery copy")
+        } catch let error as LegacyImportError {
+            guard case .verificationFailed = error else { return XCTFail("unexpected error: \(error)") }
+        }
+        let state = try await history.importStatus().state
+        XCTAssertEqual(state, .failed)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyURL.path))
         XCTAssertNil(late.lastError)
         withExtendedLifetime(sourceWriter) {}
     }
@@ -1584,6 +1594,68 @@ final class LegacyDatabaseImporterTests: XCTestCase {
             try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.verifiedAt'")
         }
         XCTAssertNotNil(verifiedAt)
+    }
+
+    func testPreRevisionCompletedImportWithPrunedRawDoesNotRestartOnStartup() async throws {
+        let (history, legacyURL, clock) = try await makePreRevisionCompletedImport()
+        let before = try await history.importStatus()
+        let importedHours = LockedCounter()
+
+        let startupWork = try await history.startLegacyImportIfNeeded(at: legacyURL, rawRetentionDays: 7) { _ in
+            _ = importedHours.increment()
+        }
+        XCTAssertNil(startupWork, "a completed import without a revision baseline must not trigger a source scan")
+
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                         now: { clock.now() },
+                                         monotonicNow: { clock.monotonicNow() },
+                                         rawRetentionDays: 7,
+                                         progress: { _ in _ = importedHours.increment() }).run()
+        let after = try await history.importStatus()
+        XCTAssertEqual(after.state, .done)
+        XCTAssertEqual(after.deleteAfter, before.deleteAfter)
+        XCTAssertEqual(importedHours.count, 0, "verification must not replay imported hours")
+    }
+
+    func testPreRevisionCompletedImportWithPrunedRawStaysDoneAfterOneAndHalfDays() async throws {
+        let (history, legacyURL, clock) = try await makePreRevisionCompletedImport(advance: 1.5 * 86_400)
+        let before = try await history.importStatus()
+        let importedHours = LockedCounter()
+
+        let startupWork = try await history.startLegacyImportIfNeeded(at: legacyURL, rawRetentionDays: 7) { _ in
+            _ = importedHours.increment()
+        }
+        XCTAssertNil(startupWork, "the elapsed raw-retention window cannot invalidate a completed import")
+
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                         now: { clock.now() },
+                                         monotonicNow: { clock.monotonicNow() },
+                                         rawRetentionDays: 7,
+                                         progress: { _ in _ = importedHours.increment() }).run()
+        let after = try await history.importStatus()
+        XCTAssertEqual(after.state, .done)
+        XCTAssertEqual(after.deleteAfter, before.deleteAfter)
+        XCTAssertEqual(importedHours.count, 0, "verification must not replay imported hours")
+    }
+
+    private func makePreRevisionCompletedImport(advance: TimeInterval = 0) async throws
+        -> (HistoryDatabase, URL, ImportTestClock) {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 30)
+        let history = try makeHistory()
+        let clock = ImportTestClock(legacyFixtureNow(days: 30))
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                         timebase: LegacyTimebase(numer: 1, denom: 1),
+                                         now: { clock.now() },
+                                         monotonicNow: { clock.monotonicNow() },
+                                         rawRetentionDays: 7).run()
+        clock.advance(by: advance)
+        try await history.pruneHistory(now: clock.now(), monotonicNow: clock.monotonicNow())
+        try await history.dbPool.write { db in
+            try db.execute(sql: "DELETE FROM Meta WHERE key IN ('legacy.rawCutoff', 'legacy.sourceRevision.dataVersion', 'legacy.sourceRevision.rowCounts')")
+        }
+        return (history, legacyURL, clock)
     }
 
     func testCompletedImportStaysDoneWhenUserAlreadyRemovedLegacySource() async throws {
