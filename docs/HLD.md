@@ -108,7 +108,8 @@ for new samples.
 - `BatteryStatus` and `PowerEvents` retain their legacy column shapes, are
   copied into the new database during migration, and are retained indefinitely.
 - `Meta` stores rollup watermarks, migration state and cursor, and
-  `settings.rawRetentionDays`.
+  `settings.rawRetentionDays`. It also stores safe wall-clock and monotonic
+  uptime anchors so a forward clock jump cannot prematurely prune history.
 
 The current schema has thirteen tables: eleven tiered tables (`App`,
 `AppSampleRaw`, `AppUsageMinute`, `AppUsageHour`, `Bucket`, `BucketSampleRaw`,
@@ -245,6 +246,11 @@ Populated only when helper is installed. Contains powermetrics-derived joule rat
    reclaimed database tail reaches the main file and the WAL can be truncated.
    An active reader may defer the truncate; the next five-minute pass retries.
    Each rollup is idempotent and advances its watermark with the transaction.
+   A current-version raw write into an already-watermarked minute or hour adds
+   its delta to the corresponding summary in the same transaction, keeping late
+   samples visible through summary-routed queries. Retention cutoffs advance
+   from a persisted safe wall-clock limited by monotonic uptime; the initial
+   anchor is bounded by the latest stored history timestamp.
 
 ### Battery Sampling Loop (every 30s)
 
@@ -308,6 +314,10 @@ cursor and writes fixed-size batches so export memory does not grow with the
 selected interval. Cancellation stops cursor iteration and removes the
 incomplete output file. Two-day minute retention leaves a full day of margin
 for the full-day query.
+
+The 7D query includes the whole hourly summary containing its left boundary.
+If that hour's raw rows have expired, this preserves the visible total at the
+cost of including up to 59 minutes and 59 seconds before the selected start.
 
 Before returning app chart points, query results with the same inferred CLI
 identity are combined per bucket across raw, minute, and hour tiers. The exact

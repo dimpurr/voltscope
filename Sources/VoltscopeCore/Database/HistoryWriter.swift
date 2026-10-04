@@ -260,7 +260,8 @@ public extension HistoryDatabase {
                     WHERE ts=? AND appId=? AND pid=? AND metricVersion=?
                     """, arguments: [sample.energyNJ, sample.cpuNs, sample.wakeups, sample.diskReadBytes,
                                      sample.diskWriteBytes, batch.start, appId, sample.pid, value.version])
-                if db.changesCount == 0 {
+                let newRawRow = db.changesCount == 0
+                if newRawRow {
                     try AppSampleRaw(
                         ts: batch.start, appId: appId, pid: sample.pid,
                         parentPid: sample.parentPid, metricVersion: value.version,
@@ -268,6 +269,11 @@ public extension HistoryDatabase {
                         wakeups: sample.wakeups, diskReadBytes: sample.diskReadBytes,
                         diskWriteBytes: sample.diskWriteBytes
                     ).insert(db)
+                }
+                if value.version != 0 {
+                    try Self.addLateAppRollupDelta(db, timestamp: batch.start, appId: appId,
+                                                   version: value.version, sample: sample,
+                                                   newRawRow: newRawRow)
                 }
             }
 
@@ -279,6 +285,10 @@ public extension HistoryDatabase {
                     try BucketSampleRaw(ts: batch.start, bucketId: bucketId,
                                         metricVersion: key.version, energyNJ: energy).insert(db)
                 }
+                if key.version != 0 {
+                    try Self.addLateBucketRollupDelta(db, timestamp: batch.start, bucketId: bucketId,
+                                                      version: key.version, energyNJ: energy)
+                }
             }
             try Coverage(ts: batch.start, visible: batch.coverage.visible, unreadable: batch.coverage.unreadable)
                 .insert(db, onConflict: .replace)
@@ -287,11 +297,11 @@ public extension HistoryDatabase {
 
     /// Runs each maintenance phase in its own transaction. The injected date
     /// keeps cutoff behavior deterministic in tests.
-    func runMaintenance(now: Date = Date()) async throws {
+    func runMaintenance(now: Date = Date(), monotonicNow: TimeInterval = ProcessInfo.processInfo.systemUptime) async throws {
         try await flushPendingWindow()
         try await rollupMinutes(now: now)
         try await rollupHours(now: now)
-        try await pruneHistory(now: now)
+        try await pruneHistory(now: now, monotonicNow: monotonicNow)
         try await incrementalVacuum()
     }
 
@@ -402,20 +412,43 @@ public extension HistoryDatabase {
     }
 
     /// Applies raw and minute retention while preserving all hour summaries.
-    func pruneHistory(now: Date = Date()) async throws {
+    func pruneHistory(now: Date = Date(), monotonicNow: TimeInterval = ProcessInfo.processInfo.systemUptime) async throws {
         let nowMS = Int64(now.timeIntervalSince1970 * 1000)
+        let monotonicMS = Int64(monotonicNow * 1000)
         try await dbPool.write { db in
+            let previousSafeMS = try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key = 'retention.safeWallClockMS'")
+            let previousMonotonicMS = try Int64.fetchOne(db, sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key = 'retention.safeMonotonicMS'")
+            let safeNowMS: Int64
+            if let previousSafeMS, let previousMonotonicMS {
+                let elapsed = max(0, monotonicMS - previousMonotonicMS)
+                safeNowMS = min(nowMS, previousSafeMS + elapsed)
+            } else if let latestHistoryMS = try Int64.fetchOne(db, sql: """
+                SELECT MAX(timestampMS) FROM (
+                    SELECT MAX(ts) AS timestampMS FROM AppSampleRaw
+                    UNION ALL SELECT MAX(ts) FROM BucketSampleRaw
+                    UNION ALL SELECT MAX(hour * 3600000) FROM AppUsageHour
+                    UNION ALL SELECT MAX(hour * 3600000) FROM BucketHour
+                )
+                """) {
+                // Establish a conservative anchor on upgrades and after an
+                // unrecorded clock jump. Subsequent runs advance by uptime.
+                safeNowMS = min(nowMS, latestHistoryMS + 5 * 60_000)
+            } else {
+                safeNowMS = nowMS
+            }
             let retention = try Int.fetchOne(
                 db,
                 sql: "SELECT CAST(value AS INTEGER) FROM Meta WHERE key = 'settings.rawRetentionDays'"
             ) ?? 7
-            let rawCutoff = (nowMS - Int64(retention) * 86_400_000) / 30_000 * 30_000
-            let minuteCutoff = nowMS / 60_000 - 2 * 24 * 60
+            let rawCutoff = (safeNowMS - Int64(retention) * 86_400_000) / 30_000 * 30_000
+            let minuteCutoff = safeNowMS / 60_000 - 2 * 24 * 60
             try db.execute(sql: "DELETE FROM AppSampleRaw WHERE ts < ?", arguments: [rawCutoff])
             try db.execute(sql: "DELETE FROM BucketSampleRaw WHERE ts < ?", arguments: [rawCutoff])
             try db.execute(sql: "DELETE FROM Coverage WHERE ts < ?", arguments: [rawCutoff])
             try db.execute(sql: "DELETE FROM AppUsageMinute WHERE minute < ?", arguments: [minuteCutoff])
             try db.execute(sql: "DELETE FROM BucketMinute WHERE minute < ?", arguments: [minuteCutoff])
+            try Self.setWatermark(db, key: "retention.safeWallClockMS", value: safeNowMS)
+            try Self.setWatermark(db, key: "retention.safeMonotonicMS", value: monotonicMS)
         }
     }
 
@@ -442,5 +475,55 @@ public extension HistoryDatabase {
             sql: "INSERT OR REPLACE INTO Meta (key, value) VALUES (?, ?)",
             arguments: [key, String(value)]
         )
+    }
+
+    private static func addLateAppRollupDelta(_ db: Database, timestamp: Int64, appId: Int64,
+                                               version: Int, sample: SampledApp, newRawRow: Bool) throws {
+        let minute = timestamp / 60_000
+        let hour = timestamp / 3_600_000
+        let minuteWatermark = try watermark(db, key: "rollup.minuteWatermark")
+        if minute <= minuteWatermark {
+            try db.execute(sql: """
+                INSERT INTO AppUsageMinute (minute, appId, metricVersion, energyNJ, cpuNs, wakeups,
+                                            diskReadBytes, diskWriteBytes, samples)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(minute, appId, metricVersion) DO UPDATE SET
+                    energyNJ=energyNJ+excluded.energyNJ, cpuNs=cpuNs+excluded.cpuNs,
+                    wakeups=wakeups+excluded.wakeups, diskReadBytes=diskReadBytes+excluded.diskReadBytes,
+                    diskWriteBytes=diskWriteBytes+excluded.diskWriteBytes, samples=samples+excluded.samples
+                """, arguments: [minute, appId, version, sample.energyNJ, sample.cpuNs, sample.wakeups,
+                                sample.diskReadBytes, sample.diskWriteBytes, newRawRow ? 1 : 0])
+        }
+        let hourWatermark = try watermark(db, key: "rollup.hourWatermark")
+        if hour <= hourWatermark {
+            try db.execute(sql: """
+                INSERT INTO AppUsageHour (hour, appId, metricVersion, energyNJ, cpuNs, wakeups,
+                                          diskReadBytes, diskWriteBytes, samples)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(hour, appId, metricVersion) DO UPDATE SET
+                    energyNJ=energyNJ+excluded.energyNJ, cpuNs=cpuNs+excluded.cpuNs,
+                    wakeups=wakeups+excluded.wakeups, diskReadBytes=diskReadBytes+excluded.diskReadBytes,
+                    diskWriteBytes=diskWriteBytes+excluded.diskWriteBytes, samples=samples+excluded.samples
+                """, arguments: [hour, appId, version, sample.energyNJ, sample.cpuNs, sample.wakeups,
+                                sample.diskReadBytes, sample.diskWriteBytes, newRawRow ? 1 : 0])
+        }
+    }
+
+    private static func addLateBucketRollupDelta(_ db: Database, timestamp: Int64, bucketId: Int64,
+                                                  version: Int, energyNJ: Int64) throws {
+        let minute = timestamp / 60_000
+        if minute <= (try watermark(db, key: "rollup.minuteWatermark")) {
+            try db.execute(sql: """
+                INSERT INTO BucketMinute (minute, bucketId, metricVersion, energyNJ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(minute, bucketId, metricVersion) DO UPDATE SET energyNJ=energyNJ+excluded.energyNJ
+                """, arguments: [minute, bucketId, version, energyNJ])
+        }
+        let hour = timestamp / 3_600_000
+        if hour <= (try watermark(db, key: "rollup.hourWatermark")) {
+            try db.execute(sql: """
+                INSERT INTO BucketHour (hour, bucketId, metricVersion, energyNJ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(hour, bucketId, metricVersion) DO UPDATE SET energyNJ=energyNJ+excluded.energyNJ
+                """, arguments: [hour, bucketId, version, energyNJ])
+        }
     }
 }

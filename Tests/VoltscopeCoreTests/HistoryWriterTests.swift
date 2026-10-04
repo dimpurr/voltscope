@@ -43,6 +43,81 @@ final class HistoryWriterTests: XCTestCase {
         XCTAssertEqual(coverage?.unreadable, 3)
     }
 
+    func testLateRawSampleAfterRollupRemainsVisibleInHourlyHistory() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let minute = epoch(2026, 1, 2, 3, 10)
+        let first = SampledApp(groupKey: "late.app", bundleIdentifier: "late.app", displayName: "Late",
+                               pid: 42, energyNJ: 10, cpuNs: 100)
+        try await db.writeTick(timestamp: minute, apps: [first], buckets: [],
+                               coverage: SampleCoverage(visible: 1, unreadable: 0))
+        try await db.flushPendingWindow()
+        try await db.runMaintenance(now: Date(timeIntervalSince1970: Double(minute + 2 * 60 * 60_000) / 1000))
+
+        try await db.writeTick(timestamp: minute + 1_000, apps: [
+            SampledApp(groupKey: "late.app", bundleIdentifier: "late.app", displayName: "Late",
+                       pid: 42, energyNJ: 5, cpuNs: 50)
+        ], buckets: [], coverage: SampleCoverage(visible: 1, unreadable: 0))
+        try await db.flushPendingWindow()
+
+        let interval = DateInterval(start: Date(timeIntervalSince1970: Double(minute) / 1000),
+                                    end: Date(timeIntervalSince1970: Double(minute + 60 * 60_000) / 1000))
+        let result = try await db.historyEnergy(in: interval, range: .h1)
+        XCTAssertEqual(result.reduce(Int64(0)) { $0 + $1.energyNJ }, 15)
+        let week = DateInterval(start: Date(timeIntervalSince1970: Double(minute) / 1000),
+                                end: Date(timeIntervalSince1970: Double(minute + 7 * 86_400_000) / 1000))
+        let hourlyResult = try await db.historyEnergy(in: week, range: .d7)
+        XCTAssertEqual(hourlyResult.reduce(Int64(0)) { $0 + $1.energyNJ }, 15)
+    }
+
+    func testClockJumpForwardDoesNotPruneRawHistoryEarly() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let timestamp = epoch(2026, 10, 3, 12)
+        try await db.dbPool.write { conn in
+            try conn.execute(sql: "INSERT OR REPLACE INTO Meta (key, value) VALUES ('settings.rawRetentionDays', '2')")
+        }
+        try await db.writeTick(timestamp: timestamp,
+            apps: [SampledApp(groupKey: "clock.app", displayName: "Clock", pid: 7, energyNJ: 11, cpuNs: 20)],
+            buckets: [], coverage: SampleCoverage(visible: 1, unreadable: 0))
+        try await db.flushPendingWindow()
+        let baseline = Date(timeIntervalSince1970: Double(timestamp + 2 * 60 * 60_000) / 1000)
+        try await db.pruneHistory(now: baseline)
+        try await db.pruneHistory(now: baseline.addingTimeInterval(17 * 86_400))
+
+        let raw = try await db.dbPool.read { conn in
+            try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE ts = ?", arguments: [timestamp]) ?? 0
+        }
+        XCTAssertEqual(raw, 1)
+    }
+
+    func testSevenDayQueryIncludesSummarizedLeftEdgeHourAfterRawPrune() async throws {
+        let db = try HistoryDatabase.makeInMemory()
+        let start = epoch(2026, 10, 3, 12, 30)
+        let sample = start + 15 * 60_000
+        try await db.dbPool.write { conn in
+            try conn.execute(sql: "INSERT OR REPLACE INTO Meta (key, value) VALUES ('settings.rawRetentionDays', '2')")
+        }
+        try await db.writeTick(timestamp: sample,
+            apps: [SampledApp(groupKey: "edge.app", bundleIdentifier: "edge.app", displayName: "Edge",
+                              pid: 8, energyNJ: 10, cpuNs: 20)], buckets: [],
+            coverage: SampleCoverage(visible: 1, unreadable: 0))
+        try await db.flushPendingWindow()
+        let monotonicStart: TimeInterval = 1_000
+        try await db.runMaintenance(now: Date(timeIntervalSince1970: Double(sample + 2 * 60 * 60_000) / 1000),
+                                    monotonicNow: monotonicStart)
+        let end = start + 7 * 86_400_000
+        try await db.runMaintenance(now: Date(timeIntervalSince1970: Double(end) / 1000),
+                                    monotonicNow: monotonicStart + 7 * 86_400)
+
+        let rawRows = try await db.dbPool.read { conn in
+            try Int.fetchOne(conn, sql: "SELECT COUNT(*) FROM AppSampleRaw WHERE ts = ?", arguments: [sample]) ?? 0
+        }
+        XCTAssertEqual(rawRows, 0, "the fixture must exercise the expired-raw path")
+
+        let result = try await db.historyEnergy(in: DateInterval(start: Date(timeIntervalSince1970: Double(start) / 1000),
+                                                                 end: Date(timeIntervalSince1970: Double(end) / 1000)), range: .d7)
+        XCTAssertEqual(result.reduce(Int64(0)) { $0 + $1.energyNJ }, 10)
+    }
+
     func testWindowFlushKeepsSeparatePIDsUnderOneApp() async throws {
         let db = try HistoryDatabase.makeInMemory()
         let timestamp = epoch(2026, 1, 2, 3, 4)

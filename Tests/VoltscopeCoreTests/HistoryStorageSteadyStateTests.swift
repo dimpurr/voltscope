@@ -71,9 +71,11 @@ final class HistoryStorageSteadyStateTests: XCTestCase {
                                    coverage: SampleCoverage(visible: 8, unreadable: 0))
         }
         let rollupNow = Date(timeIntervalSince1970: Double(sampleStart + 1_001 * 30_000) / 1000)
-        try await db.runMaintenance(now: rollupNow)
+        let monotonicStart: TimeInterval = 1_000
+        try await db.runMaintenance(now: rollupNow, monotonicNow: monotonicStart)
         let beforePrune = try await metrics(db)
-        try await db.runMaintenance(now: Date(timeIntervalSince1970: Double(nowMS) / 1000))
+        try await db.runMaintenance(now: Date(timeIntervalSince1970: Double(nowMS) / 1000),
+                                    monotonicNow: monotonicStart + 9 * 86_400)
         let afterPrune = try await metrics(db)
         print("STORAGE_RECLAMATION before_pages=\(beforePrune.pageCount) before_freelist=\(beforePrune.freelistCount) before_db_bytes=\(beforePrune.databaseBytes) before_wal_bytes=\(beforePrune.walBytes) after_pages=\(afterPrune.pageCount) after_freelist=\(afterPrune.freelistCount) after_db_bytes=\(afterPrune.databaseBytes) after_wal_bytes=\(afterPrune.walBytes)")
 

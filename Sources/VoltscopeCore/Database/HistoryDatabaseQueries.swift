@@ -441,7 +441,7 @@ private extension HistoryDatabase {
     static func queryArguments(start: Int64, end: Int64, width: Int64, metricVersion: Int, watermark: Int64?, range: HistoryRange) -> StatementArguments {
         let unitMS: Int64 = range == .d7 ? 3_600_000 : 60_000
         let cutoff = watermark.map { ($0 + 1) * unitMS } ?? start
-        let tierStart = ((start + unitMS - 1) / unitMS) * unitMS
+        let tierStart = range == .d7 ? (start / unitMS) * unitMS : ((start + unitMS - 1) / unitMS) * unitMS
         let tierEnd = (end / unitMS) * unitMS
         return [width, width, tierStart, tierEnd, Int64(metricVersion),
                 width, width, start, end, Int64(metricVersion), cutoff, tierStart, tierEnd]
@@ -450,7 +450,7 @@ private extension HistoryDatabase {
     static func coverageArguments(start: Int64, end: Int64, width: Int64, version: Int, watermark: Int64?, range: HistoryRange) -> StatementArguments {
         let unitMS: Int64 = range == .d7 ? 3_600_000 : 60_000
         let cutoff = watermark.map { ($0 + 1) * unitMS } ?? start
-        let tierStart = ((start + unitMS - 1) / unitMS) * unitMS
+        let tierStart = range == .d7 ? (start / unitMS) * unitMS : ((start + unitMS - 1) / unitMS) * unitMS
         let tierEnd = (end / unitMS) * unitMS
         return [width, width, tierStart, tierEnd, Int64(version),
                 width, width, start, end, Int64(version), cutoff, tierStart, tierEnd]
