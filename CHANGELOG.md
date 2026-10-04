@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## Unreleased — 0.10.2
 
 - Label CSV group metadata as `app_name` and `app_path` so exports do not imply
   those values identify each PID's process.
