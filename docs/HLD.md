@@ -185,8 +185,9 @@ and records a resumable cursor. Before marking migration complete, it verifies
 energy and battery counts and checks both the newest source timestamp and the
 SQLite source revision; a changed source revision restarts the hour scan so
 commits with earlier timestamps are included. The revision is recorded with
-the completion marker and checked again when a completed source is found at
-launch, covering commits that land between the final check and that marker.
+the completion marker. A completed source is not rescanned at launch; it is
+revalidated once at the deletion deadline (a `verifiedAt` marker prevents
+repeat scans), which also covers commits that land after the final check.
 Legacy raw import and verification cutoffs use the same persisted,
 sleep-inclusive safe clock as history pruning. The seven-day source deletion
 deadline and its expiry check use that clock as well, so a forward wall-clock

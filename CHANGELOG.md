@@ -19,8 +19,9 @@
 - Anchor legacy raw import, verification, and source expiry to the persisted
   sleep-inclusive safe clock so wall-clock jumps cannot skip retained detail or
   remove the recovery database early.
-- Persist completed source revisions and recheck them at launch so commits
-  arriving between the final revision check and completion are imported.
+- Persist completed source revisions and revalidate a completed legacy source
+  once at its deletion deadline instead of rescanning it at every launch;
+  imports completed by earlier versions stay complete.
 
 ## 0.10.1 — 2026-10-04
 
