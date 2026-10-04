@@ -217,7 +217,6 @@ final class AppState: ObservableObject {
             self.processEnergyAvailable = ProcessSampler().energyAvailable
             self.rawRetentionDays = (try? await db.rawRetentionDays()) ?? 7
             let legacyURL = try AppPaths.databaseURL()
-            _ = try? await db.deleteLegacyDatabaseIfExpired(at: legacyURL)
             await refreshLegacyImportStatus()
             if let importWork = try await db.startLegacyImportIfNeeded(
                 at: legacyURL, rawRetentionDays: rawRetentionDays, progress: { [weak self] progress in
@@ -232,6 +231,9 @@ final class AppState: ObservableObject {
             let coord = SamplingCoordinator(database: db)
             self.coordinator = coord
             await coord.start()
+            Task.detached(priority: .utility) {
+                _ = try? await db.deleteLegacyDatabaseIfExpired(at: legacyURL)
+            }
 
             let listener = EventListener()
             listener.start { [weak self, weak coord] event in
@@ -270,7 +272,6 @@ final class AppState: ObservableObject {
     func refreshNow() async {
         guard let db = database else { return }
         do {
-            if let legacyURL = try? AppPaths.databaseURL() { _ = try? await db.deleteLegacyDatabaseIfExpired(at: legacyURL) }
             self.lastBattery = try await db.latestBatterySnapshot()
             // Use appBreakdown so we can split user apps from system processes
             // for the dropdown's collapsible System section, in one read.

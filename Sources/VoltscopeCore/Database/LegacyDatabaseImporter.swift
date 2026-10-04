@@ -209,9 +209,11 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
     }
 
     private func performRun() async throws {
+        var wasDone = false
         do {
             guard timebase.numer > 0, timebase.denom > 0 else { throw LegacyImportError.invalidTimebase }
             let savedState = try await meta("legacy.state")
+            wasDone = savedState == LegacyImportState.done.rawValue
             // The source is intentionally retained only until the user removes
             // it or the retention deadline passes. A completed import remains
             // complete when that file has already been removed.
@@ -245,6 +247,18 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            if wasDone {
+                guard let importError = error as? LegacyImportError,
+                      case .verificationFailed = importError else {
+                    throw error
+                }
+                try await history.dbPool.write { db in
+                    try Self.putMeta(db, key: "legacy.state", value: LegacyImportState.failed.rawValue)
+                    try Self.putMeta(db, key: "legacy.error", value: error.localizedDescription)
+                    try db.execute(sql: "DELETE FROM Meta WHERE key IN ('legacy.doneAt', 'legacy.deleteAfter', 'legacy.cursorHour', 'legacy.verifiedAt')")
+                }
+                throw error
+            }
             try await history.dbPool.write { db in
                 try Self.putMeta(db, key: "legacy.state", value: LegacyImportState.failed.rawValue)
                 try Self.putMeta(db, key: "legacy.error", value: error.localizedDescription)
@@ -260,10 +274,11 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
     /// full by the shared verifier.
     private func verifyCompletedImport(source: DatabaseQueue, bounds: LegacyBounds) async throws {
         let anchor = try await meta("legacy.windowAnchor").flatMap(Int64.init) ?? bounds.latestTimestamp
+        let storedCutoff = try await meta("legacy.rawCutoff").flatMap(Int64.init)
         let anchoredCutoff = Self.windowStart(anchor - Int64(rawRetentionDays) * 86_400_000)
         let currentCutoff = Self.windowStart(Int64(now().timeIntervalSince1970 * 1000)
             - Int64(rawRetentionDays) * 86_400_000)
-        let rawCutoff = max(anchoredCutoff, currentCutoff)
+        let rawCutoff = max(storedCutoff ?? anchoredCutoff, currentCutoff)
         let upperBound = bounds.latestTimestamp &+ 1
         let totals = try Self.sourceRead(source) { src in
             try Self.readVerificationTotals(src, rawCutoff: rawCutoff, upperBound: upperBound)
@@ -360,16 +375,19 @@ public final class LegacyDatabaseImporter: @unchecked Sendable {
                 throw error
             }
 
-            guard let refreshed = try await refreshedBoundsOrFinish(source: source, bounds: bounds, round: round) else { return }
+            guard let refreshed = try await refreshedBoundsOrFinish(source: source, bounds: bounds, round: round,
+                                                                     rawCutoff: verificationRawCutoff) else { return }
             bounds = refreshed
         }
     }
 
-    private func refreshedBoundsOrFinish(source: DatabaseQueue, bounds: LegacyBounds, round: Int) async throws -> LegacyBounds? {
+    private func refreshedBoundsOrFinish(source: DatabaseQueue, bounds: LegacyBounds, round: Int,
+                                         rawCutoff: Int64) async throws -> LegacyBounds? {
         let newest = try Self.readLatestTimestamp(source)
         if newest == nil || newest! <= bounds.latestTimestamp {
-            let doneAt = Int64(Date().timeIntervalSince1970 * 1000)
+            let doneAt = Int64(now().timeIntervalSince1970 * 1000)
             try await history.dbPool.write { db in
+                try Self.putMeta(db, key: "legacy.rawCutoff", value: String(rawCutoff))
                 try Self.putMeta(db, key: "legacy.doneAt", value: String(doneAt))
                 try Self.putMeta(db, key: "legacy.deleteAfter", value: String(doneAt + 7 * 86_400_000))
                 try Self.putMeta(db, key: "legacy.state", value: LegacyImportState.done.rawValue)
@@ -736,9 +754,17 @@ public extension HistoryDatabase {
         let hasCompletionRecord = try await dbPool.read { db in
             try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.doneAt'") != nil
         }
-        if state == .done, hasCompletionRecord, FileManager.default.fileExists(atPath: legacyURL.path) {
+        let hasVerifiedAt = try await dbPool.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM Meta WHERE key='legacy.verifiedAt'") != nil
+        }
+        if state == .done, hasCompletionRecord, !hasVerifiedAt,
+           FileManager.default.fileExists(atPath: legacyURL.path) {
             try await LegacyDatabaseImporter(history: self, legacyURL: legacyURL,
-                                             rawRetentionDays: try await rawRetentionDays()).run()
+                                             now: { now }, rawRetentionDays: try await rawRetentionDays()).run()
+            try await dbPool.write { db in
+                try db.execute(sql: "INSERT INTO Meta(key,value) VALUES ('legacy.verifiedAt', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                               arguments: [String(Int64(now.timeIntervalSince1970 * 1000))])
+            }
         }
         try await deleteLegacyDatabase(at: legacyURL, requireExpiry: true, now: now)
         return true
