@@ -1602,6 +1602,25 @@ final class LegacyDatabaseImporterTests: XCTestCase {
         XCTAssertNotNil(status.deleteAfter)
     }
 
+    func testCompletedImportStartupFailsOpenWhenLegacySourceIsNotSQLite() async throws {
+        let dir = try directory()
+        let legacyURL = dir.appendingPathComponent("db.sqlite")
+        try makeLegacy(at: legacyURL, days: 1)
+        let history = try makeHistory()
+        try await LegacyDatabaseImporter(history: history, legacyURL: legacyURL,
+                                         timebase: LegacyTimebase(numer: 1, denom: 1)).run()
+        let invalidSource = Data("replaced legacy source".utf8)
+        try invalidSource.write(to: legacyURL)
+
+        let importWork = try await history.startLegacyImportIfNeeded(at: legacyURL)
+
+        XCTAssertNil(importWork, "an unreadable completed source is treated as unchanged during startup")
+        XCTAssertEqual(try Data(contentsOf: legacyURL), invalidSource,
+                       "startup must preserve the retained source for independent deletion revalidation")
+        let status = try await history.importStatus()
+        XCTAssertEqual(status.state, .done)
+    }
+
     func testCompletedImportKeepsDoneAfterNonVerificationSourceError() async throws {
         let dir = try directory()
         let legacyURL = dir.appendingPathComponent("db.sqlite")

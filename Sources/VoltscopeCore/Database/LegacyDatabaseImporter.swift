@@ -822,7 +822,7 @@ public extension HistoryDatabase {
         let importer = LegacyDatabaseImporter(history: self, legacyURL: legacyURL,
                                               rawRetentionDays: rawRetentionDays, progress: progress)
         if try await importStatus().state == .done,
-           !(try await importer.completedSourceRevisionChanged()) { return nil }
+           ((try? await importer.completedSourceRevisionChanged()) ?? false) != true { return nil }
         return importer.start()
     }
 
