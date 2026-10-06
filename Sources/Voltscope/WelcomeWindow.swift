@@ -78,7 +78,7 @@ private final class WelcomeWindowController: NSObject, NSWindowDelegate {
         let hosting = NSHostingController(rootView: content)
         let window = NSWindow(contentViewController: hosting)
         window.identifier = NSUserInterfaceItemIdentifier("welcome")
-        window.title = "Welcome to Voltscope"
+        window.title = AccessibilityLabels.welcomeWindowTitle
         window.styleMask = [.titled, .closable]
         window.setContentSize(NSSize(width: 440, height: 286))
         window.isReleasedWhenClosed = false
@@ -132,10 +132,9 @@ private struct WelcomeWindow: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Welcome to Voltscope")
+                Text(AccessibilityLabels.welcomeHeading)
                     .font(.title2.weight(.semibold))
-                Text("Keep your energy history complete")
-                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
                 Text("Voltscope records energy only while it is running. Enable Launch at login to keep your history continuous. You can change this later in Settings.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -161,8 +160,12 @@ private struct WelcomeWindow: View {
             }
 
             HStack {
-                Button("Not Now") {
+                Button {
                     finish()
+                } label: {
+                    Text("Not Now")
+                        .frame(minHeight: HitTarget.minimumSide)
+                        .contentShape(Rectangle())
                 }
                 .keyboardShortcut(.cancelAction)
                 .accessibilityLabel("Not Now")
@@ -171,23 +174,35 @@ private struct WelcomeWindow: View {
                 Spacer()
 
                 if appState.loginItemStatus == .enabled {
-                    Button("Done") {
+                    Button {
                         finish()
+                    } label: {
+                        Text("Done")
+                            .frame(minHeight: HitTarget.minimumSide)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderedProminent)
                     .accessibilityLabel("Done")
                     .accessibilityIdentifier(AccessibilityIdentifiers.welcomeDone)
                 } else if appState.loginItemStatus == .requiresApproval {
-                    Button("Open Login Items") {
+                    Button {
                         onOpenLoginItems()
+                    } label: {
+                        Text("Open Login Items")
+                            .frame(minHeight: HitTarget.minimumSide)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderedProminent)
                     .accessibilityLabel("Open Login Items")
                     .accessibilityIdentifier(AccessibilityIdentifiers.welcomeOpenLoginItems)
                 } else {
-                    Button("Enable at Login") {
+                    Button {
                         appState.setLaunchAtLogin(true)
                         if appState.loginItemStatus == .enabled { finish() }
+                    } label: {
+                        Text("Enable at Login")
+                            .frame(minHeight: HitTarget.minimumSide)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(!appState.canEnableLaunchAtLogin)

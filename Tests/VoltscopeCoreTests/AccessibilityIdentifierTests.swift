@@ -153,4 +153,18 @@ final class AccessibilityIdentifierTests: XCTestCase {
         XCTAssertEqual(AccessibilityLabels.legendSelectionValue(selected: false, anySelected: true), "Muted")
         XCTAssertEqual(AccessibilityLabels.legendSelectionValue(selected: false, anySelected: false), "All apps shown")
     }
+
+    func testPanelWindowTitleNamesTheMenuBarPanel() {
+        XCTAssertEqual(AccessibilityLabels.panelWindowTitle, "Voltscope")
+    }
+
+    func testWelcomeHeadingDiffersFromTheWelcomeWindowTitle() {
+        XCTAssertEqual(AccessibilityLabels.welcomeWindowTitle, "Welcome to Voltscope")
+        XCTAssertNotEqual(
+            AccessibilityLabels.welcomeHeading,
+            AccessibilityLabels.welcomeWindowTitle,
+            "the in-window heading must not repeat the window title, or VoiceOver announces it twice"
+        )
+        XCTAssertFalse(AccessibilityLabels.welcomeHeading.isEmpty)
+    }
 }

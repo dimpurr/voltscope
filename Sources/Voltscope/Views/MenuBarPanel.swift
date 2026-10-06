@@ -9,13 +9,16 @@ struct MenuBarPanel: View {
     @State private var systemExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: MenuBarPanelLayout.blockSpacing) {
             panelContent
             footer
         }
-        .padding(14)
-        .frame(width: 340, alignment: .top)
-        .frame(minHeight: 428, alignment: .top)
+        .padding(MenuBarPanelLayout.outerPadding)
+        .frame(width: MenuBarPanelLayout.width, alignment: .top)
+        .frame(minHeight: MenuBarPanelLayout.maximumCollapsedHeight, alignment: .top)
+        .background {
+            PanelWindowName(title: AccessibilityLabels.panelWindowTitle)
+        }
         .onExitCommand {
             NSApp.keyWindow?.orderOut(nil)
             NSApp.deactivate()
@@ -36,7 +39,7 @@ struct MenuBarPanel: View {
     }
 
     private var panelContentStack: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: MenuBarPanelLayout.blockSpacing) {
             chargeHeader
             Divider()
             healthSection
@@ -69,12 +72,12 @@ struct MenuBarPanel: View {
             HStack {
                 Text(timeRemainingText)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.accessibleSecondary)
                     .accessibilityLabel("Time remaining: \(timeRemainingText)")
                 Spacer()
                 Text(appState.statusText)
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Color.accessibleSecondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .accessibilityLabel("Status: \(appState.statusText)")
@@ -127,11 +130,11 @@ struct MenuBarPanel: View {
     private var healthSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text("Health").font(.caption).foregroundStyle(.secondary)
+                Text("Health").font(.caption).foregroundStyle(Color.accessibleSecondary)
                 Spacer()
                 Text(healthPercentText)
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.accessibleSecondary)
                     .accessibilityLabel("Battery health \(healthPercentAccessibilityValue)")
             }
             HealthBar(healthRatio: healthRatio ?? 0)
@@ -199,19 +202,19 @@ struct MenuBarPanel: View {
     // MARK: - Top apps section
 
     private var topAppsSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: MenuBarPanelLayout.appRowSpacing) {
             Text(appState.processEnergyAvailable ? "Top energy use (last 30 min)" : "Top CPU time (last 30 min)")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Color.accessibleSecondary)
                 .accessibilityLabel(appState.processEnergyAvailable ? "Top CPU energy use (last 30 min)" : "Top CPU time (last 30 min)")
             if !appState.processEnergyAvailable {
                 Text("Intel Mac computers do not provide per-process energy data.")
-                    .font(.caption2).foregroundStyle(.tertiary)
+                    .font(.caption2).foregroundStyle(Color.accessibleSecondary)
             }
             if appState.topApps.isEmpty && appState.systemSummary.count == 0 {
                 Text("Collecting samples…")
                     .font(.callout)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Color.accessibleSecondary)
             } else {
                 let topMax = appState.topApps.map { appState.processEnergyAvailable ? $0.totalEnergyNJ : $0.totalCPUNS }.max() ?? 0
                 ForEach(appState.topApps) { row in
@@ -235,7 +238,7 @@ struct MenuBarPanel: View {
             if !appState.processEnergyAvailable {
                 Text(String(format: "%.1fs", Double(row.totalCPUNS) / 1e9))
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.accessibleSecondary)
                     .accessibilityHidden(true)
             }
             IntensityDots(filled: IntensityDots.dotCount(value: MenuBarMetricPresentation.value(
@@ -248,6 +251,8 @@ struct MenuBarPanel: View {
             } label: {
                 Image(systemName: "arrow.up.right.square")
                     .foregroundStyle(.secondary)
+                    .frame(width: HitTarget.minimumSide, height: HitTarget.minimumSide)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .help("Open in History window")
@@ -266,6 +271,7 @@ struct MenuBarPanel: View {
             openWindow(id: "history")
             NSApp.activate(ignoringOtherApps: true)
         }
+        .frame(minHeight: MenuBarPanelLayout.appRowHeight)
     }
 
     private func rowTooltip(_ row: HistoryDatabase.TopAppEnergy) -> String {
@@ -298,10 +304,10 @@ struct MenuBarPanel: View {
                     Image(systemName: "gearshape.2")
                         .foregroundStyle(.secondary)
                     Text("System")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.accessibleSecondary)
                     Text(systemSummaryText)
                         .font(.caption)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(Color.accessibleSecondary)
                     Spacer()
                 }
                 .contentShape(Rectangle())
@@ -325,7 +331,7 @@ struct MenuBarPanel: View {
                     if appState.systemSummary.count > appState.systemSummary.topItems.count {
                         Text("+ \(appState.systemSummary.count - appState.systemSummary.topItems.count) more in History")
                             .font(.caption)
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(Color.accessibleSecondary)
                             .padding(.leading, 24)
                     }
                 }
@@ -374,6 +380,9 @@ struct MenuBarPanel: View {
                     NSApp.activate(ignoringOtherApps: true)
                 } label: {
                     Label("Settings", systemImage: "gearshape")
+                        .foregroundStyle(Color.accessibleSecondary)
+                        .frame(minHeight: HitTarget.minimumSide)
+                        .contentShape(Rectangle())
                 }
                 .keyboardShortcut(",", modifiers: .command)
                 .accessibilityLabel("Settings")
@@ -383,9 +392,12 @@ struct MenuBarPanel: View {
                 } label: {
                     HStack(spacing: 4) {
                         Label("Check for Updates", systemImage: "arrow.down.circle")
+                            .foregroundStyle(Color.accessibleSecondary)
                         Text("v\(appState.appVersion)")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Color.accessibleSecondary)
                     }
+                    .frame(minHeight: HitTarget.minimumSide)
+                    .contentShape(Rectangle())
                 }
                 .disabled(!appState.canCheckForUpdates)
                 .accessibilityElement(children: .combine)
@@ -395,6 +407,9 @@ struct MenuBarPanel: View {
                     NSApp.terminate(nil)
                 } label: {
                     Label("Quit", systemImage: "power")
+                        .foregroundStyle(Color.accessibleSecondary)
+                        .frame(minHeight: HitTarget.minimumSide)
+                        .contentShape(Rectangle())
                 }
                 .keyboardShortcut("q", modifiers: .command)
                 .accessibilityLabel("Quit")
@@ -408,6 +423,40 @@ struct MenuBarPanel: View {
     }
 }
 
+/// Names the panel's window for assistive technology. A `MenuBarExtra` popover
+/// window has no title of its own, so assistive technology announces the panel
+/// without a name at all; the title is applied when the hosting view joins the
+/// window.
+private struct PanelWindowName: NSViewRepresentable {
+    let title: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = WindowNamingView()
+        view.windowName = title
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? WindowNamingView)?.windowName = title
+    }
+}
+
+private final class WindowNamingView: NSView {
+    var windowName: String? {
+        didSet { applyWindowName() }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyWindowName()
+    }
+
+    private func applyWindowName() {
+        guard let windowName else { return }
+        window?.setAccessibilityTitle(windowName)
+    }
+}
+
 private struct LabeledMetric: View {
     let label: String
     let value: String
@@ -416,7 +465,7 @@ private struct LabeledMetric: View {
         VStack(alignment: .leading, spacing: 1) {
             Text(label)
                 .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(Color.accessibleSecondary)
             Text(value)
                 .font(.callout)
         }
