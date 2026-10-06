@@ -10,9 +10,7 @@ struct EnergyStackedChart: View {
     @Binding var selectedApp: String?
 
     @MainActor private func color(_ id: String) -> Color {
-        if id == HistoryChartModel.otherID { return .gray.opacity(0.4) }
-        if id == HistoryChartModel.systemID { return .gray }
-        return HistoryColors.color(id)
+        HistoryColors.color(id)
     }
     private var tickDates: [Date] {
         // Keep the data resolution independent from label density. Seven days
@@ -77,7 +75,7 @@ struct EnergyStackedChart: View {
                             yStart: .value("Older method", 0), yEnd: .value("Older method", model.upper)
                         )
                         .foregroundStyle(.orange.opacity(0.18))
-                        .accessibilityLabel("Data recorded with an older method; not added to current readings")
+                        .accessibilityHidden(true)
                     }
                     ForEach(model.segments) { p in
                         RectangleMark(
@@ -86,7 +84,7 @@ struct EnergyStackedChart: View {
                             yStart: .value("CPU energy", p.bottom), yEnd: .value("CPU energy", p.top))
                             .foregroundStyle(color(p.group))
                             .opacity((selectedApp == nil || selectedApp == p.group ? 1 : 0.18))
-                            .accessibilityLabel("\(model.series.first(where: { $0.id == p.group })?.name ?? p.group), \(p.date.formatted()), \(String(format: "%.2f", p.top - p.bottom)) joules CPU energy")
+                            .accessibilityHidden(true)
                     }
                     ForEach([0.0, model.upper / 2, model.upper], id: \.self) { y in
                         RuleMark(y: .value("Grid", y)).foregroundStyle(.secondary.opacity(0.12))
@@ -102,18 +100,25 @@ struct EnergyStackedChart: View {
                     }
                 }
                 .chartPlotStyle { $0.clipped() }
-                .accessibilityLabel("App CPU energy chart")
-                .accessibilityValue(accessibilitySummary)
-                .accessibilityChartDescriptor(chartDescriptor)
-                .accessibilityIdentifier(AccessibilityIdentifiers.historyChartEnergy)
-                .chartOverlay { proxy in
-                    EnergyHoverOverlay(model: model, bucketSeconds: bucketSeconds, domain: xDomain, proxy: proxy)
-                }
                 .overlay {
                     if model.segments.isEmpty { Text("No recorded CPU energy in this range").font(.callout).foregroundStyle(.secondary) }
                 }
                 valueLabels
-            }.frame(height: 210)
+            }
+            .frame(height: 210)
+            // Collapse the chart into one element. `children: .ignore` (rather
+            // than `.contain`) is what publishes the container element on
+            // macOS; the summary and descriptor keep per-point detail. The
+            // interactive inspector overlay is applied after this element, so
+            // it stays a separate, reachable element.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(AccessibilityLabels.appCPUEnergyChartLabel)
+            .accessibilityValue(accessibilitySummary)
+            .accessibilityChartDescriptor(chartDescriptor)
+            .accessibilityIdentifier(AccessibilityIdentifiers.historyChartEnergy)
+            .chartOverlay { proxy in
+                EnergyHoverOverlay(model: model, bucketSeconds: bucketSeconds, domain: xDomain, proxy: proxy)
+            }
             ViewThatFits(in: .horizontal) {
                 legend
                 ScrollView(.horizontal, showsIndicators: false) { legend }
@@ -237,8 +242,16 @@ private struct EnergyHoverOverlay: View {
 
 /// Persist identity-to-color assignment instead of assigning colors by energy rank.
 @MainActor enum HistoryColors {
-    static let palette: [Color] = [.blue, .orange, .purple, .teal, .pink, .indigo, .brown, .mint]
+    private static let systemPalette: [Color] = [.blue, .orange, .purple, .teal, .pink, .indigo, .brown, .mint]
     private static var mapping = UserDefaults.standard.dictionary(forKey: "historyAppColors") as? [String: Int] ?? [:]
+    static var palette: [Color] {
+        systemPalette.enumerated().map { offset, systemColor in
+            HistoryChartPalette.appSlotOverrides[offset].map { Color(historyPair: $0) } ?? systemColor
+        }
+    }
+    static let otherApps = Color(historyPair: HistoryChartPalette.otherAppsSeries)
+    static let systemApps = Color(historyPair: HistoryChartPalette.systemSeries)
+    static let chargingGreen = Color(historyPair: HistoryChartPalette.chargingGreen)
     static func register(_ ids: [String]) {
         var changed = false
         for id in ids where mapping[id] == nil {
@@ -248,8 +261,43 @@ private struct EnergyHoverOverlay: View {
         if changed { UserDefaults.standard.set(mapping, forKey: "historyAppColors") }
     }
     static func color(_ id: String) -> Color {
+        if id == HistoryChartModel.otherID { return otherApps }
+        if id == HistoryChartModel.systemID { return systemApps }
         let index = max(0, mapping[id] ?? 0)
-        if index < palette.count { return palette[index] }
-        return Color(hue: (Double(index) * 0.61803398875).truncatingRemainder(dividingBy: 1), saturation: 0.7, brightness: 0.85)
+        if index < systemPalette.count { return palette[index] }
+        return Color(hex: HistoryChartPalette.fallbackHex(appIndex: index))
+    }
+}
+
+extension NSAppearance {
+    var isDarkAppearance: Bool {
+        bestMatch(from: [.darkAqua, .vibrantDark, .accessibilityHighContrastDarkAqua, .accessibilityHighContrastVibrantDark]) != nil
+    }
+}
+
+extension Color {
+    /// Explicit light/dark sRGB pair from `HistoryChartPalette`.
+    init(historyPair pair: HistoryChartPalette.PaletteColor) {
+        self.init(nsColor: NSColor(name: nil, dynamicProvider: { appearance in
+            appearance.isDarkAppearance ? NSColor(hex: pair.dark) : NSColor(hex: pair.light)
+        }))
+    }
+
+    /// Single sRGB color from an 0xRRGGBB value, used by the compensated
+    /// hue-sequence fallback which is identical in both appearances.
+    init(hex: UInt32) {
+        let red = Double((hex >> 16) & 0xFF) / 255
+        let green = Double((hex >> 8) & 0xFF) / 255
+        let blue = Double(hex & 0xFF) / 255
+        self.init(red: red, green: green, blue: blue)
+    }
+}
+
+extension NSColor {
+    convenience init(hex: UInt32) {
+        let red = CGFloat((hex >> 16) & 0xFF) / 255
+        let green = CGFloat((hex >> 8) & 0xFF) / 255
+        let blue = CGFloat(hex & 0xFF) / 255
+        self.init(srgbRed: red, green: green, blue: blue, alpha: 1)
     }
 }

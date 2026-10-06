@@ -315,7 +315,16 @@ History charts provide full assistive technology coverage: the battery chart
 speaks charging intervals and sleep periods in its VoiceOver summary with
 occurrence counts and totals clipped to the selected range, and its chart
 descriptor carries only real battery readings; visual axis labels are hidden to
-avoid redundant spoken numbers.
+avoid redundant spoken numbers. Each chart is exposed as one assistive
+technology element with its title (`Battery level chart` / `App CPU energy
+chart`), the summary as its value, the chart descriptor, and the stable
+identifier from the table above. The element is created with
+`accessibilityElement(children: .ignore)` on the layer that wraps the chart, so
+macOS reliably publishes it and the marks themselves publish no individual
+elements; per-point detail stays available through the chart descriptor and the
+arrow-key inspector rather than one stop per data point. The App CPU energy
+chart's interactive time inspector is applied after that element, so it remains
+a separate reachable element for keyboard slice scrubbing.
 The App CPU energy chart supports keyboard-based slice scrubbing via arrow keys;
 the inspected bucket's time and recorded CPU energy reading are spoken as a
 dynamic value, where a bucket with no record is distinct from a recorded zero-energy bucket.
@@ -389,6 +398,21 @@ speaks the state of its one toggle. The System processes row speaks its process
 count, its recorded App CPU energy in joules, and that amount's share of
 recorded App CPU energy, so it is not mistaken for a share of whole-device
 battery drain.
+
+Chart series colors keep at least 3:1 contrast against the History window
+background in both light and dark appearances, and the two aggregate grays are
+separated in luminance so System and Other apps stay distinguishable where the
+stacks touch. App colors remain stable by bundle identity; base-palette slots
+that miss the threshold use explicit light/dark values from `HistoryChartPalette`
+in VoltscopeCore, and colors for identities beyond the base palette are
+compensated to clear the same threshold on both backgrounds. Because macOS
+renders these sRGB colors in the display's wider P3 gamut, the palette holds the
+*rendered* contrast (the P3 encoding an untagged screenshot reports) at 3.2:1
+rather than the bare 3:1 floor, so the on-device measurement keeps a margin. The
+charging green shared by the trace and the visible `Charging` caption keeps at
+least 4.5:1 because it also marks caption text. `HistoryChartPaletteTests`
+enforces these thresholds with the WCAG relative-luminance formula and the
+rendered pipeline.
 
 ### Chart hover behavior (v0.5.2)
 

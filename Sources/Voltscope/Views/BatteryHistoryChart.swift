@@ -75,7 +75,7 @@ struct BatteryHistoryChart: View {
             HStack {
                 Text("Battery level").font(.headline)
                 Spacer()
-                Label("Charging", systemImage: "bolt.fill").foregroundStyle(.green)
+                Label("Charging", systemImage: "bolt.fill").foregroundStyle(HistoryColors.chargingGreen)
                 Label("Sleep", systemImage: "moon.fill").foregroundStyle(.secondary)
             }.font(.caption)
             HStack(alignment: .top, spacing: 6) {
@@ -83,22 +83,25 @@ struct BatteryHistoryChart: View {
                     ForEach(levels) { point in
                         LineMark(x: .value("Time", point.date), y: .value("Battery", point.level), series: .value("Segment", point.segment))
                             .interpolationMethod(.stepEnd)
-                            .foregroundStyle(.green)
+                            .foregroundStyle(HistoryColors.chargingGreen)
                             .lineStyle(StrokeStyle(lineWidth: 1.8))
                         PointMark(x: .value("Time", point.date), y: .value("Battery", point.level))
-                            .symbolSize(3).foregroundStyle(.green)
+                            .symbolSize(3).foregroundStyle(HistoryColors.chargingGreen)
                     }
                     ForEach(charging.indices, id: \.self) { i in
                         RectangleMark(xStart: .value("Start", charging[i].start), xEnd: .value("End", charging[i].end), yStart: .value("Bottom", -8), yEnd: .value("Top", -3))
-                            .foregroundStyle(.green)
+                            .foregroundStyle(HistoryColors.chargingGreen)
+                            .accessibilityHidden(true)
                     }
                     ForEach(sleep.indices, id: \.self) { i in
                         RectangleMark(xStart: .value("Start", sleep[i].start), xEnd: .value("End", sleep[i].end), yStart: .value("Bottom", -15), yEnd: .value("Top", -10))
                             .foregroundStyle(.secondary.opacity(0.35))
+                            .accessibilityHidden(true)
                     }
                     if let selection {
                         RectangleMark(xStart: .value("Start", selection.start), xEnd: .value("End", selection.end), yStart: .value("Bottom", 0), yEnd: .value("Top", 100))
                             .foregroundStyle(Color.accentColor.opacity(0.12))
+                            .accessibilityHidden(true)
                     }
                     RuleMark(y: .value("Full", 100)).foregroundStyle(.secondary.opacity(0.12))
                     RuleMark(y: .value("Empty", 0)).foregroundStyle(.secondary.opacity(0.12))
@@ -106,10 +109,6 @@ struct BatteryHistoryChart: View {
                 .chartXScale(domain: domain).chartYScale(domain: -17...100)
                 .chartXAxis(.hidden).chartYAxis(.hidden).chartLegend(.hidden)
                 .chartPlotStyle { $0.clipped() }
-                .accessibilityLabel("Battery level chart")
-                .accessibilityValue(accessibilitySummary)
-                .accessibilityChartDescriptor(chartDescriptor)
-                .accessibilityIdentifier(AccessibilityIdentifiers.historyChartBattery)
                 .overlay {
                     if levels.isEmpty { Text("No battery observations in this range").font(.caption).foregroundStyle(.secondary) }
                 }
@@ -117,6 +116,16 @@ struct BatteryHistoryChart: View {
                     .font(.caption2).foregroundStyle(.secondary).frame(width: 38)
                     .accessibilityHidden(true)
             }.frame(height: 80)
+            // Collapse the whole chart into one element. `children: .ignore`
+            // (rather than `.contain`) is what actually publishes a container
+            // element on macOS: the wrapping stack becomes the element and the
+            // per-mark elements Charts would otherwise publish are dropped. The
+            // summary and chart descriptor keep per-point detail available.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(AccessibilityLabels.batteryLevelChartLabel)
+            .accessibilityValue(accessibilitySummary)
+            .accessibilityChartDescriptor(chartDescriptor)
+            .accessibilityIdentifier(AccessibilityIdentifiers.historyChartBattery)
 
         }.help("Battery level uses a fixed 0–100% scale. Gaps indicate missing observations; charging and sleep are shown below the trace.")
     }

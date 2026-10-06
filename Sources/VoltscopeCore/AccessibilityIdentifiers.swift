@@ -66,6 +66,11 @@ public enum AccessibilityMetrics {
 
 /// Spoken accessibility text for controls whose labels explain dynamic state.
 public enum AccessibilityLabels {
+    /// VoiceOver label for the History battery level chart container.
+    public static let batteryLevelChartLabel = "Battery level chart"
+    /// VoiceOver label for the History App CPU energy chart container.
+    public static let appCPUEnergyChartLabel = "App CPU energy chart"
+
     public static func openHistoryFromApp(name: String) -> String {
         "Open History from \(name)"
     }
