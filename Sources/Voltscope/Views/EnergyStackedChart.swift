@@ -100,20 +100,25 @@ struct EnergyStackedChart: View {
                     }
                 }
                 .chartPlotStyle { $0.clipped() }
-                .chartOverlay { proxy in
-                    EnergyHoverOverlay(model: model, bucketSeconds: bucketSeconds, domain: xDomain, proxy: proxy)
-                }
                 .overlay {
                     if model.segments.isEmpty { Text("No recorded CPU energy in this range").font(.callout).foregroundStyle(.secondary) }
                 }
                 valueLabels
             }
             .frame(height: 210)
-            .accessibilityElement(children: .contain)
+            // Collapse the chart into one element. `children: .ignore` (rather
+            // than `.contain`) is what publishes the container element on
+            // macOS; the summary and descriptor keep per-point detail. The
+            // interactive inspector overlay is applied after this element, so
+            // it stays a separate, reachable element.
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel(AccessibilityLabels.appCPUEnergyChartLabel)
             .accessibilityValue(accessibilitySummary)
             .accessibilityChartDescriptor(chartDescriptor)
             .accessibilityIdentifier(AccessibilityIdentifiers.historyChartEnergy)
+            .chartOverlay { proxy in
+                EnergyHoverOverlay(model: model, bucketSeconds: bucketSeconds, domain: xDomain, proxy: proxy)
+            }
             ViewThatFits(in: .horizontal) {
                 legend
                 ScrollView(.horizontal, showsIndicators: false) { legend }

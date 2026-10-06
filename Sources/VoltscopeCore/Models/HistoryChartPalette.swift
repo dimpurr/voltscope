@@ -14,6 +14,13 @@ import Foundation
 /// miss the contrast thresholds are overridden here with explicit light/dark
 /// values. The hue-sequence fallback used for slots beyond the base palette is
 /// compensated to keep only already-compliant colors unchanged.
+///
+/// On a wide-gamut display macOS stores each sRGB color as its Display P3
+/// encoding, and an untagged screenshot (the accessibility audit's capture)
+/// reads those bytes back as sRGB. That shifts saturated colors and lowers the
+/// measured contrast by up to ~0.15, so the palette holds the *rendered*
+/// contrast (`renderedContrastRatio`) at `renderedSeriesMinimumContrast`
+/// instead of only clearing the 3:1 sRGB floor.
 public enum HistoryChartPalette {
     /// An explicit sRGB color for the light and dark appearance, 0xRRGGBB.
     public struct PaletteColor: Sendable, Equatable {
@@ -36,6 +43,10 @@ public enum HistoryChartPalette {
 
     /// Minimum contrast for chart series, legend swatches, and trace marks.
     public static let seriesMinimumContrast: Double = 3.0
+    /// Minimum contrast the series colors must keep after the display pipeline
+    /// is applied (see `renderedContrastRatio`). It is deliberately above the
+    /// 3:1 floor so the on-device measurement keeps a margin.
+    public static let renderedSeriesMinimumContrast: Double = 3.2
     /// Minimum contrast for colors also used as visible caption text.
     public static let standaloneTextMinimumContrast: Double = 4.5
     /// Minimum luminance separation between the two gray series so the chart
@@ -58,76 +69,64 @@ public enum HistoryChartPalette {
     public static let fallbackHueStep = 0.61803398875
     public static let fallbackRawSaturation = 0.7
     public static let fallbackRawBrightness = 0.85
-    /// Luminance shared by compensated fallback colors: the band that keeps
-    /// at least 3:1 against both chart backgrounds.
-    static let compensatedTargetLuminance = 0.225
 
     /// sRGB hex for the app slot beyond the base palette. Colors that already
-    /// meet `seriesMinimumContrast` on both appearances keep the exact raw
-    /// hue-sequence color so existing app color assignments never shift.
-    /// Others are compensated toward `compensatedTargetLuminance`, a
-    /// luminance valid on both backgrounds: brightness is adjusted toward the
-    /// band while the hue can still reach it, and saturation is reduced as a
-    /// last resort for hues too dim to reach the band at full brightness.
+    /// clear `renderedSeriesMinimumContrast` on both appearances keep the exact
+    /// raw hue-sequence color so existing app color assignments never shift.
+    /// Others are placed at the midpoint brightness whose rendered contrast
+    /// clears the threshold on both backgrounds; saturation is reduced as a
+    /// last resort for hues that cannot reach the shared band at full
+    /// saturation.
     public static func fallbackHex(appIndex: Int) -> UInt32 {
         let hue = (Double(max(0, appIndex)) * fallbackHueStep).truncatingRemainder(dividingBy: 1)
         let raw = rgb(hue: hue, saturation: fallbackRawSaturation, brightness: fallbackRawBrightness)
-        if contrastRatio(raw, against: historyBackgrounds.light) >= seriesMinimumContrast,
-           contrastRatio(raw, against: historyBackgrounds.dark) >= seriesMinimumContrast {
-            return raw
-        }
-        let rawLuminance = relativeLuminance(raw)
-        let fullBrightnessLuminance = relativeLuminance(rgb(hue: hue, saturation: fallbackRawSaturation, brightness: 1))
-        if rawLuminance > compensatedTargetLuminance {
-            // Too bright against the light background: dim toward the band.
-            var low = 0.0
-            var high = fallbackRawBrightness
-            var best = 0.0
-            for _ in 0..<40 {
-                let mid = (low + high) / 2
-                let luminance = relativeLuminance(rgb(hue: hue, saturation: fallbackRawSaturation, brightness: mid))
-                if luminance < compensatedTargetLuminance {
-                    low = mid
-                } else {
-                    best = mid
-                    high = mid
-                }
+        if meetsRenderedMinimum(raw) { return raw }
+        var saturation = fallbackRawSaturation
+        while saturation > 0 {
+            if let brightness = renderedBandBrightness(hue: hue, saturation: saturation) {
+                return rgb(hue: hue, saturation: saturation, brightness: brightness)
             }
-            return rgb(hue: hue, saturation: fallbackRawSaturation, brightness: best)
+            saturation -= 0.05
         }
-        if fullBrightnessLuminance >= compensatedTargetLuminance {
-            // Too dim against the dark background: brighten toward the band.
-            var low = fallbackRawBrightness
-            var high = 1.0
-            var best = 1.0
-            for _ in 0..<40 {
-                let mid = (low + high) / 2
-                let luminance = relativeLuminance(rgb(hue: hue, saturation: fallbackRawSaturation, brightness: mid))
-                if luminance < compensatedTargetLuminance {
-                    low = mid
-                } else {
-                    best = mid
-                    high = mid
-                }
-            }
-            return rgb(hue: hue, saturation: fallbackRawSaturation, brightness: best)
-        }
-        // The hue cannot reach the band by brightness alone: desaturate at
-        // full brightness until the compensated luminance is met.
+        let grayBrightness = renderedBandBrightness(hue: hue, saturation: 0) ?? 0.5
+        return rgb(hue: hue, saturation: 0, brightness: grayBrightness)
+    }
+
+    static func meetsRenderedMinimum(_ hex: UInt32) -> Bool {
+        renderedContrastRatio(hex, against: historyBackgrounds.light) >= renderedSeriesMinimumContrast
+            && renderedContrastRatio(hex, against: historyBackgrounds.dark) >= renderedSeriesMinimumContrast
+    }
+
+    /// Midpoint brightness whose rendered contrast clears
+    /// `renderedSeriesMinimumContrast` on both backgrounds, or nil when this
+    /// hue and saturation cannot reach the shared band.
+    static func renderedBandBrightness(hue: Double, saturation: Double) -> Double? {
+        let darkEdge = renderedBrightness(hue: hue, saturation: saturation,
+                                          against: historyBackgrounds.dark, risesWithBrightness: true)
+        let lightEdge = renderedBrightness(hue: hue, saturation: saturation,
+                                           against: historyBackgrounds.light, risesWithBrightness: false)
+        guard darkEdge <= lightEdge else { return nil }
+        return (darkEdge + lightEdge) / 2
+    }
+
+    /// Brightness at which `rgb(hue:saturation:brightness:)` first meets the
+    /// threshold against `background`. Contrast rises with brightness on the
+    /// dark background and falls on the light one.
+    static func renderedBrightness(hue: Double, saturation: Double,
+                                   against background: UInt32, risesWithBrightness: Bool) -> Double {
         var low = 0.0
-        var high = fallbackRawSaturation
-        var best = 0.0
+        var high = 1.0
         for _ in 0..<40 {
             let mid = (low + high) / 2
-            let luminance = relativeLuminance(rgb(hue: hue, saturation: mid, brightness: 1))
-            if luminance < compensatedTargetLuminance {
-                high = mid
-            } else {
-                best = mid
+            let contrast = renderedContrastRatio(rgb(hue: hue, saturation: saturation, brightness: mid),
+                                                 against: background)
+            if (contrast < renderedSeriesMinimumContrast) == risesWithBrightness {
                 low = mid
+            } else {
+                high = mid
             }
         }
-        return rgb(hue: hue, saturation: best, brightness: 1)
+        return risesWithBrightness ? high : low
     }
 
     /// WCAG 2.x relative luminance of an 0xRRGGBB sRGB color.
@@ -142,6 +141,32 @@ public enum HistoryChartPalette {
         return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
     }
 
+    /// The Display P3 encoding of an sRGB color, i.e. the bytes a wide-gamut
+    /// screenshot stores for it. macOS renders the sRGB series colors in the
+    /// display's P3 primaries; a screenshot with no embedded color profile is
+    /// then read back as sRGB, so this is what a naive sampler measures.
+    public static func displayP3Encoded(_ hex: UInt32) -> UInt32 {
+        let linearRGB = [linear(channel(hex, 16)), linear(channel(hex, 8)), linear(channel(hex, 0))]
+        let p3 = srgbToDisplayP3.map { row in
+            row[0] * linearRGB[0] + row[1] * linearRGB[1] + row[2] * linearRGB[2]
+        }
+        func byte(_ value: Double) -> UInt32 { UInt32(max(0, min(255, (encode(value) * 255).rounded()))) }
+        return (byte(p3[0]) << 16) | (byte(p3[1]) << 8) | byte(p3[2])
+    }
+
+    /// Contrast ratio as measured from an untagged wide-gamut screenshot: both
+    /// colors are converted to their Display P3 encoding first.
+    public static func renderedContrastRatio(_ a: UInt32, against b: UInt32) -> Double {
+        contrastRatio(displayP3Encoded(a), against: displayP3Encoded(b))
+    }
+
+    /// sRGB to Display P3 (both D65) in linear light.
+    static let srgbToDisplayP3: [[Double]] = [
+        [0.822461969, 0.177538031, 0.0],
+        [0.033194199, 0.966805801, 0.0],
+        [0.017082631, 0.072397441, 0.910519928],
+    ]
+
     static func channel(_ hex: UInt32, _ shift: UInt32) -> Double {
         Double((hex >> shift) & 0xFF) / 255
     }
@@ -152,6 +177,10 @@ public enum HistoryChartPalette {
 
     static func linear(_ c: Double) -> Double {
         c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+    }
+
+    static func encode(_ c: Double) -> Double {
+        c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1 / 2.4) - 0.055
     }
 
     /// Standard sRGB HSV to RGB conversion, matching `Color(hue:saturation:brightness:)`.

@@ -45,6 +45,52 @@ final class HistoryChartPaletteTests: XCTestCase {
         }
     }
 
+    func testSeriesColorsMeetRenderedContrastThresholdsOnBothAppearances() {
+        // The on-device audit samples an untagged wide-gamut screenshot, so the
+        // palette must clear the rendered threshold, not only the sRGB floor.
+        let threshold = HistoryChartPalette.renderedSeriesMinimumContrast
+        let backgrounds = HistoryChartPalette.historyBackgrounds
+        var pairs: [(String, UInt32, UInt32)] = [
+            ("systemSeries", HistoryChartPalette.systemSeries.light, HistoryChartPalette.systemSeries.dark),
+            ("otherAppsSeries", HistoryChartPalette.otherAppsSeries.light, HistoryChartPalette.otherAppsSeries.dark),
+        ]
+        for (slot, pair) in HistoryChartPalette.appSlotOverrides.sorted(by: { $0.key < $1.key }) {
+            pairs.append(("app slot \(slot)", pair.light, pair.dark))
+        }
+        for (name, light, dark) in pairs {
+            XCTAssertGreaterThanOrEqual(
+                HistoryChartPalette.renderedContrastRatio(light, against: backgrounds.light), threshold,
+                "\(name) light \(String(format: "%06X", light)) must reach \(threshold):1 when rendered")
+            XCTAssertGreaterThanOrEqual(
+                HistoryChartPalette.renderedContrastRatio(dark, against: backgrounds.dark), threshold,
+                "\(name) dark \(String(format: "%06X", dark)) must reach \(threshold):1 when rendered")
+        }
+    }
+
+    func testDisplayP3EncodingMatchesMeasuredSeriesColors() {
+        // Real-device samples from the 0.10.3/W44 audit: the rendered bytes the
+        // untagged screenshot reported for each sRGB palette color. Reproducing
+        // them keeps the rendered-contrast checks aligned with the device.
+        let samples: [(UInt32, UInt32, String)] = [
+            (0xD941C1, 0xC84DBC, "Python"),
+            (0x38952D, 0x53933D, "Claude Code"),
+            (0xD9417E, 0xC84D7D, "Paste"),
+            (0xC348F1, 0xB550E9, "CodexBar"),
+            (0xADADB3, 0xACACB1, "System"),
+            (0x85858B, 0x858589, "Other apps"),
+        ]
+        for (sRGB, measured, name) in samples {
+            let encoded = HistoryChartPalette.displayP3Encoded(sRGB)
+            for shift in [16, 8, 0] {
+                let actual = Int((encoded >> UInt32(shift)) & 0xFF)
+                let expected = Int((measured >> UInt32(shift)) & 0xFF)
+                XCTAssertLessThanOrEqual(
+                    abs(actual - expected), 2,
+                    "\(name) channel \(shift): encoded \(String(format: "%06X", encoded)) vs measured \(String(format: "%06X", measured))")
+            }
+        }
+    }
+
     func testChargingGreenMeetsTextContrastOnBothAppearances() {
         // The charging green also colors the visible "Charging" caption, so it
         // is held to the text threshold, not the graphics threshold.
@@ -89,10 +135,25 @@ final class HistoryChartPaletteTests: XCTestCase {
         }
     }
 
+    func testFallbackColorsMeetRenderedContrastThresholdsForBothAppearances() {
+        let backgrounds = HistoryChartPalette.historyBackgrounds
+        let threshold = HistoryChartPalette.renderedSeriesMinimumContrast
+        for index in 8..<64 {
+            let hex = HistoryChartPalette.fallbackHex(appIndex: index)
+            XCTAssertGreaterThanOrEqual(
+                HistoryChartPalette.renderedContrastRatio(hex, against: backgrounds.light), threshold,
+                "fallback index \(index) \(String(format: "%06X", hex)) must reach \(threshold):1 when rendered on light")
+            XCTAssertGreaterThanOrEqual(
+                HistoryChartPalette.renderedContrastRatio(hex, against: backgrounds.dark), threshold,
+                "fallback index \(index) \(String(format: "%06X", hex)) must reach \(threshold):1 when rendered on dark")
+        }
+    }
+
     func testFallbackPreservesRawColorWhenAlreadyCompliant() {
-        // Indices 13, 16, 22, and 24 measure compliant with the raw
-        // hue-sequence parameters; their assigned colors must not shift.
-        for index in [13, 16, 22, 24] {
+        // Indices 13, 22, 24, and 58 measure compliant with the raw
+        // hue-sequence parameters under the rendered threshold; their assigned
+        // colors must not shift.
+        for index in [13, 22, 24, 58] {
             let hue = (Double(index) * HistoryChartPalette.fallbackHueStep).truncatingRemainder(dividingBy: 1)
             let raw = HistoryChartPalette.rgb(hue: hue,
                                               saturation: HistoryChartPalette.fallbackRawSaturation,
@@ -105,7 +166,7 @@ final class HistoryChartPaletteTests: XCTestCase {
     func testFallbackRawConversionMatchesSwiftUIColor() {
         // The raw fall-back path renders through Color(hue:saturation:brightness:),
         // which is plain sRGB HSV; the Core conversion must agree byte for byte.
-        let index = 16
+        let index = 22
         let hue = (Double(index) * HistoryChartPalette.fallbackHueStep).truncatingRemainder(dividingBy: 1)
         for appearance in [NSAppearance(named: .aqua)!, NSAppearance(named: .darkAqua)!] {
             let previous = NSAppearance.current

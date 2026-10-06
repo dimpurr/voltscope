@@ -116,7 +116,12 @@ struct BatteryHistoryChart: View {
                     .font(.caption2).foregroundStyle(.secondary).frame(width: 38)
                     .accessibilityHidden(true)
             }.frame(height: 80)
-            .accessibilityElement(children: .contain)
+            // Collapse the whole chart into one element. `children: .ignore`
+            // (rather than `.contain`) is what actually publishes a container
+            // element on macOS: the wrapping stack becomes the element and the
+            // per-mark elements Charts would otherwise publish are dropped. The
+            // summary and chart descriptor keep per-point detail available.
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel(AccessibilityLabels.batteryLevelChartLabel)
             .accessibilityValue(accessibilitySummary)
             .accessibilityChartDescriptor(chartDescriptor)
