@@ -327,31 +327,32 @@ accessibility identifiers.
 ### Keyboard focus and hit targets
 
 Keyboard-only users must be able to reach everything in History. The window
-content exposes one Tab stop per region instead of one per row: the time-range
-control, Display options menu, and Export action in the toolbar, the chart time
+content exposes one Tab stop per region instead of one per row: the chart time
 inspector, each legend chip, the System processes disclosure, and the heading of
 each breakdown column (`history.energyBreakdown`, `history.appBreakdown`).
 Rows inside the two columns stay out of the Tab ring so the ring does not grow
 with the number of recorded apps; VoiceOver and Switch Control still reach them
 individually.
 
+Toolbar controls (the time range, Display options, and Export) live in the
+AppKit toolbar. On macOS the toolbar has its own key-view loop, separate from
+the window content, so Tab does not reach them; keyboard-only users open the
+toolbar with the system shortcut **Control-F5** ("Move focus to the window
+toolbar"). This is platform behavior, not an app-specific focus ring.
+
 Legend chips are caption-sized on screen, so each chip is padded vertically to
 `AccessibilityMetrics.minimumTargetSize` (24 pt) and takes pointer hits across
 its whole padded width.
 
-Toolbar controls live in the AppKit toolbar, which macOS reaches with the
-system's "Move focus to the toolbar" shortcut rather than with Tab. They are
-marked focusable so a future focus-ring change cannot silently exclude them,
-but the shortcut is the supported keyboard path to the time range, Display
-options, and Export.
-
 Controls must present one accessible element, not a parent and child that
-announce the same name and identifier. The Export action therefore hides its
-caption from the accessibility tree and keeps a single `history.exportCSV`
-identifier, and the caption stays visible on screen. The Display menu is named
-"Display options" and speaks the state of its one toggle instead of an
-unrelated default value. The System processes row joins its caption with a
-colon rather than nesting parentheses around numbers that already carry them.
+announce the same name and identifier. SwiftUI exposes a toolbar `Button` as
+both the `NSToolbarItem` wrapper and an inner button, so the Export action is
+built on `NSButton`, which is a single element with one `history.exportCSV`
+identifier. The Display menu is built on `NSPopUpButton` so its spoken name is
+"Display options" rather than the toolbar menu's default "Edit" title, and it
+speaks the state of its one toggle. The System processes row joins its caption
+with a colon rather than nesting parentheses around numbers that already carry
+them.
 
 ### Chart hover behavior (v0.5.2)
 
@@ -444,9 +445,9 @@ the inline system process list sits in a scroll region capped at approximately
 540 pt, while the footer actions remain visible below it. The collapsed panel
 keeps its normal compact intrinsic height.
 
-`Settings` opens the dedicated Voltscope Settings window. `Display` in the History
-toolbar remains display-only and currently contains `Group system processes`.
-Settings is not placed in that menu.
+`Settings` opens the dedicated Voltscope Settings window. The Display options
+menu in the History toolbar remains display-only and currently contains
+`Group system processes`. Settings is not placed in that menu.
 
 ### Settings window
 

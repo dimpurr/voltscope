@@ -144,41 +144,34 @@ struct HistoryWindow: View {
                 .pickerStyle(.segmented).frame(minWidth: 280)
                 .accessibilityLabel("Time range")
                 .accessibilityIdentifier(AccessibilityIdentifiers.historyTimeRange)
-                .focusable()
                 .onChange(of: range) { _ in rangeManuallyChosen = true }
         }
         ToolbarItem(placement: .principal) {
-            Menu {
-                Toggle("Group system processes", isOn: $groupSystem)
-                    .accessibilityLabel("Group system processes")
-                    .accessibilityIdentifier(AccessibilityIdentifiers.historyGroupSystemProcesses)
-            } label: { Label("Display", systemImage: "slider.horizontal.3") }
-                .menuIndicator(.visible).help(AccessibilityLabels.displayOptionsName)
-                .accessibilityLabel(AccessibilityLabels.displayOptionsName)
-                // Without an explicit value the menu announced a stray "Edit"
-                // that does not appear on screen. Speak the toggle state instead.
-                .accessibilityValue(AccessibilityLabels.displayOptionsValue(groupSystemProcesses: groupSystem))
-                .accessibilityIdentifier(AccessibilityIdentifiers.historyDisplayOptions)
-                .focusable()
+            // AppKit-backed so the spoken name is "Display options" rather than
+            // the toolbar menu's default "Edit" title (audit F-18).
+            ToolbarMenu(
+                systemImage: "slider.horizontal.3",
+                accessibilityLabel: AccessibilityLabels.displayOptionsName,
+                accessibilityValue: AccessibilityLabels.displayOptionsValue(groupSystemProcesses: groupSystem),
+                identifier: AccessibilityIdentifiers.historyDisplayOptions,
+                itemTitle: "Group system processes",
+                itemIdentifier: AccessibilityIdentifiers.historyGroupSystemProcesses,
+                itemIsOn: groupSystem,
+                itemAction: { groupSystem.toggle() }
+            )
         }
         ToolbarItem(placement: .primaryAction) {
-            Button {
-                if isExporting { exportTask?.cancel() } else { exportCurrent() }
-            } label: {
-                // The caption is still drawn, but keeping it out of the
-                // accessibility tree stops SwiftUI from promoting it into a
-                // second button element that repeats the name and identifier.
-                Label {
-                    Text(isExporting ? "Cancel Export" : "Export as CSV…")
-                        .accessibilityHidden(true)
-                } icon: {
-                    Image(systemName: isExporting ? "xmark.circle" : "square.and.arrow.up")
+            // AppKit-backed so the action is one accessible button, not the
+            // toolbar wrapper plus an inner SwiftUI button (audit F-06).
+            ToolbarButton(
+                systemImage: isExporting ? "xmark.circle" : "square.and.arrow.up",
+                accessibilityLabel: isExporting ? "Cancel CSV export" : "Export as CSV",
+                identifier: AccessibilityIdentifiers.historyExportCSV,
+                isEnabled: isExporting || (loaded && appState.database != nil),
+                action: {
+                    if isExporting { exportTask?.cancel() } else { exportCurrent() }
                 }
-            }
-                .disabled(!isExporting && (!loaded || appState.database == nil))
-                .accessibilityLabel(isExporting ? "Cancel CSV export" : "Export as CSV")
-                .accessibilityIdentifier(AccessibilityIdentifiers.historyExportCSV)
-                .focusable()
+            )
         }
     }
 

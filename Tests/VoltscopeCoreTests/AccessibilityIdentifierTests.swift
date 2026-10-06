@@ -214,7 +214,9 @@ final class AccessibilityIdentifierTests: XCTestCase {
         XCTAssertEqual(AccessibilityLabels.unparenthesized("0 procs"), "0 procs")
         XCTAssertEqual(AccessibilityLabels.unparenthesized("("), "(")
         XCTAssertEqual(AccessibilityLabels.unparenthesized("(wrapped)"), "wrapped")
-        XCTAssertEqual(AccessibilityLabels.unparenthesized("(a) (b)"), "a) (b")
+        // Two independent groups are not one wrapping pair and must survive.
+        XCTAssertEqual(AccessibilityLabels.unparenthesized("(a) (b)"), "(a) (b)")
+        XCTAssertEqual(AccessibilityLabels.unparenthesized("(a)(b)"), "(a)(b)")
     }
 
     func testDisplayOptionsSpokenNameAndValue() {

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Improve keyboard and screen-reader access to the History window: the time range, Display options, and Export controls, both breakdown columns, and the System processes row join the keyboard focus order, the Export control is announced once instead of twice, the Display menu announces the state of its toggle instead of an unrelated word, chart legend chips are large enough to hit and carry stable identifiers, and the grouped System processes row no longer repeats its numbers inside a second set of parentheses.
+- Improve keyboard and screen-reader access to the History window: the toolbar's time range, Display options, and Export controls are reachable with the system Control-F5 toolbar shortcut, both breakdown columns and the System processes row join the keyboard focus order, the Export control is a single accessible button announced once, the Display menu announces "Display options" and the state of its toggle, chart legend chips are large enough to hit and carry stable identifiers, and the grouped System processes row no longer repeats its numbers inside a second set of parentheses.
 
 ## 0.10.3 — 2026-10-04
 

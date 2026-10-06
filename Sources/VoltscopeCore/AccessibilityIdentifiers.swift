@@ -133,8 +133,26 @@ public enum AccessibilityLabels {
     }
 
     /// Removes one wrapping pair of parentheses, leaving the text unchanged.
+    ///
+    /// The parentheses must wrap the whole string. Text such as `"(a) (b)"` is
+    /// two independent groups, not one wrapping pair, and is returned as-is.
     public static func unparenthesized(_ text: String) -> String {
         guard text.hasPrefix("("), text.hasSuffix(")"), text.count > 1 else { return text }
+        var depth = 0
+        for index in text.indices {
+            switch text[index] {
+            case "(":
+                depth += 1
+            case ")":
+                depth -= 1
+                if depth == 0 && index != text.index(before: text.endIndex) {
+                    return text
+                }
+            default:
+                break
+            }
+        }
+        guard depth == 0 else { return text }
         return String(text.dropFirst().dropLast())
     }
 }
