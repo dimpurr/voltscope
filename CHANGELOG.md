@@ -10,10 +10,10 @@
 - Mark the Welcome window's in-window heading as a heading and give it distinct copy, so assistive technology announces it once instead of repeating the window title.
 - Name the menu bar panel window "Voltscope" for assistive technology, matching the History and Settings windows.
 - Improve keyboard and screen-reader access to the History window: the toolbar's time range, Display options, and Export controls are reachable with the system Control-F5 toolbar shortcut, both breakdown columns and the System processes row join the keyboard focus order, the Export control keeps its visible "Export as CSV…" caption while announcing as a single accessible button, the Display menu announces "Display options" and the state of its toggle, chart legend chips are large enough to hit and carry stable identifiers, and the grouped System processes row now speaks its recorded App CPU energy and that amount's share of recorded App CPU energy.
-- Accessibility: each History chart is now one VoiceOver stop with a spoken
+each History chart is now one VoiceOver stop with a spoken
   title, summary, audio-graph descriptor, and stable identifier, instead of
   exposing every data point as a separate unnamed element.
-- Accessibility: History chart series colors now keep at least 3:1 contrast
+History chart series colors now keep at least 3:1 contrast
   against the window background in light and dark appearances, including a
   margin for the display's wider color gamut, the System and Other apps grays
   are clearly separated, and the charging green used for the `Charging` caption
