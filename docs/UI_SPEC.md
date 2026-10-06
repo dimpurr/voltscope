@@ -320,6 +320,32 @@ channel metrics into single VoiceOver elements expressing relative magnitudes of
 the largest hardware channel, and app breakdown rows expose per-app
 accessibility identifiers.
 
+### Target sizes and text contrast
+
+Compact controls keep their dense layout but never fall below a 24 pt target in
+either dimension: the menu bar panel's per-app "Open in History" action, the panel
+footer actions, the Settings database action, and the Welcome window buttons.
+`HitTarget.minimumSide` in `VoltscopeCore` owns that floor, and views reach it
+with a frame plus `contentShape(Rectangle())` so the whole frame is pressable
+([test: AccessibilityContrastTests.testHitTargetMinimumMeetsWCAGTargetSizeFloor]).
+
+Text that carries information in the menu bar panel and the Settings window — panel
+captions, metric labels, the sampling status line, the version label, and Settings
+explanations and warnings — uses one secondary text style instead of the system
+`.secondary` and `.tertiary` styles, which measure 4.32:1 and 1.90:1 against the
+light panel background. The style darkens in the light appearance and keeps the
+system value in the dark one, clearing 4.5:1 on the panel and window backgrounds of
+both appearances. `AccessibilityPalette` owns the two values and `ContrastRatio`
+computes the ratios
+([test: AccessibilityContrastTests.testSecondaryTextClearsBodyTextMinimumOnEverySurface],
+[test: AccessibilityContrastTests.testContrastRatioReproducesMeasuredSystemHierarchyColors]).
+Icons keep the system tint: they are graphics rather than text and already clear
+the 3:1 floor.
+
+The menu bar panel window is named `Voltscope` for assistive technology, because a
+menu bar popover window carries no title of its own
+([test: AccessibilityIdentifierTests.testPanelWindowTitleNamesTheMenuBarPanel]).
+
 ### Chart hover behavior (v0.5.2)
 
 Stacked bars are colored by app via `foregroundStyle(by:)`, which makes glance-interpretation hard once more than three apps are present — the legend becomes a memory-aid lookup table. Keep the hover detail contextual to the selected bucket:
@@ -442,7 +468,10 @@ start independently. The window uses this copy:
 
 Closing the window or pressing Escape has the same effect as `Not Now`. The
 choice is recorded once in a UserDefaults onboarding marker. That marker does
-not store the toggle value. If registration reaches `requiresApproval`, the
+not store the toggle value. The in-window heading repeats the window title and
+carries the heading trait, so assistive technology announces it as a navigation
+landmark instead of an extra stop in the reading order
+([test: AccessibilityIdentifierTests.testWelcomeHeadingMatchesTheWelcomeWindowTitle]). If registration reaches `requiresApproval`, the
 primary action becomes `Open Login Items` and the window explains the next
 step. Opening Login Items does not complete or dismiss Welcome: it remains as a
 temporary floating context window while System Settings is open. When the user

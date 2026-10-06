@@ -83,4 +83,18 @@ public enum AccessibilityLabels {
         if selected { return "Highlighted" }
         return anySelected ? "Muted" : "All apps shown"
     }
+
+    /// Spoken name of the menu bar panel's window. The panel is a
+    /// `MenuBarExtra` popover whose hosting window ships without a title, so
+    /// the name is applied through the window's accessibility title.
+    public static let panelWindowTitle = "Voltscope"
+
+    /// Window title of the first-run Welcome window, spoken when the window
+    /// takes focus.
+    public static let welcomeWindowTitle = "Welcome to Voltscope"
+
+    /// In-window Welcome heading. It repeats `welcomeWindowTitle` on purpose:
+    /// the heading trait turns it into a navigation landmark instead of a
+    /// third unlabelled stop in the reading order.
+    public static let welcomeHeading = "Welcome to Voltscope"
 }

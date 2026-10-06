@@ -153,4 +153,13 @@ final class AccessibilityIdentifierTests: XCTestCase {
         XCTAssertEqual(AccessibilityLabels.legendSelectionValue(selected: false, anySelected: true), "Muted")
         XCTAssertEqual(AccessibilityLabels.legendSelectionValue(selected: false, anySelected: false), "All apps shown")
     }
+
+    func testPanelWindowTitleNamesTheMenuBarPanel() {
+        XCTAssertEqual(AccessibilityLabels.panelWindowTitle, "Voltscope")
+    }
+
+    func testWelcomeHeadingMatchesTheWelcomeWindowTitle() {
+        XCTAssertEqual(AccessibilityLabels.welcomeWindowTitle, "Welcome to Voltscope")
+        XCTAssertEqual(AccessibilityLabels.welcomeHeading, AccessibilityLabels.welcomeWindowTitle)
+    }
 }

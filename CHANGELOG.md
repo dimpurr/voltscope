@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Accessibility
+
+- Enlarge the menu bar panel's per-app "Open in History" action, the panel footer buttons, the Settings database action, and the Welcome window buttons so every control is at least 24 pt in both dimensions.
+- Readable secondary text in the menu bar panel and Settings window: captions, metric labels, the status line, the version label, and Settings explanations and warnings now keep a contrast ratio of at least 4.5:1 in both light and dark appearances instead of relying on the system muted styles.
+- Mark the Welcome window's in-window heading as a heading so assistive technology announces it once as a navigation landmark.
+- Name the menu bar panel window "Voltscope" for assistive technology, matching the History and Settings windows.
+
 ## 0.10.3 — 2026-10-04
 
 - Add accessibility label, value, and stable identifier to the menu bar status item.

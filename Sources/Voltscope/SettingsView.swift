@@ -26,14 +26,14 @@ struct SettingsView: View {
 
                 Text("Start Voltscope in the menu bar when you sign in.")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.accessibleSecondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 if appState.loginItemStatus == .requiresApproval {
                     HStack(spacing: 8) {
                         Text("Allow Voltscope in Login Items to continue.")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Color.accessibleSecondary)
                         Spacer(minLength: 8)
                         Button("Open Login Items") {
                             appState.openLoginItems()
@@ -77,16 +77,20 @@ struct SettingsView: View {
                             .accessibilityLabel("Database import progress")
                             .accessibilityValue("\(progress.importedHours) of \(progress.totalHours) hours imported")
                         Text("\(progress.importedHours) of \(progress.totalHours) hours imported")
-                            .font(.caption2).foregroundStyle(.secondary)
+                            .font(.caption2).foregroundStyle(Color.accessibleSecondary)
                     }
                     if let deleteAfter = appState.legacyImportStatus?.deleteAfter {
                         Text("Automatic deletion after \(deleteAfter.formatted(date: .abbreviated, time: .shortened))")
-                            .font(.caption2).foregroundStyle(.secondary)
+                            .font(.caption2).foregroundStyle(Color.accessibleSecondary)
                     }
                     HStack {
                         Spacer()
-                        Button("Delete old database now") {
+                        Button {
                             showingDeleteConfirmation = true
+                        } label: {
+                            Text("Delete old database now")
+                                .frame(minHeight: HitTarget.minimumSide)
+                                .contentShape(Rectangle())
                         }
                         .controlSize(.small)
                         .disabled(appState.legacyImportStatus?.state != .done)
@@ -120,7 +124,7 @@ struct SettingsView: View {
     private func feedback(_ message: String, symbol: String) -> some View {
         Label(message, systemImage: symbol)
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color.accessibleSecondary)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityLabel(message)
     }
