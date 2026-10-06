@@ -20,6 +20,11 @@ struct AppBreakdownList: View {
                 .font(.callout.bold())
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 2)
+                // One keyboard entry point for the whole column: the rows below
+                // stay out of the Tab ring so it does not grow with the number
+                // of recorded apps.
+                .focusable()
+                .accessibilityIdentifier(AccessibilityIdentifiers.historyAppBreakdown)
 
             ForEach(userEntries) { entry in
                 AppRow(
@@ -200,7 +205,8 @@ private struct SystemGroupSection: View {
             }
         }
         .padding(.top, 6)
-        .accessibilityLabel("System processes, \(summary)")
+        .focusable()
+        .accessibilityLabel(AccessibilityLabels.systemProcessesGroupLabel(summary: summary))
         .accessibilityIdentifier(AccessibilityIdentifiers.historySystemProcesses)
     }
 

@@ -270,13 +270,17 @@ Their public English values and controls are:
 | `menu.systemProcesses` | Menu bar System processes disclosure row |
 | `menu.openAppInHistory.<app-identity>` | Per-app menu row action; `<app-identity>` is the bundle identifier, or the process name when no bundle identifier is available |
 | `history.timeRange` | History time-range picker |
+| `history.timeRange.<range>` | One segment of the History time-range picker, so a single range can be addressed on its own |
 | `history.displayOptions` | History Display options menu |
 | `history.groupSystemProcesses` | Group system processes menu item |
 | `history.exportCSV` | Export as CSV action |
 | `history.clearAppSelection` | Clear selected app action |
 | `history.systemProcesses` | System processes row in the History app breakdown |
+| `history.energyBreakdown` | Keyboard entry point for the Energy breakdown column |
+| `history.appBreakdown` | Keyboard entry point for the Apps column |
 | `history.chartBattery` | History battery level chart |
 | `history.chartEnergy` | History app CPU energy stacked chart |
+| `history.legend.<series-id>` | Chart legend chip; `<series-id>` is the stable app identity, or the aggregated `System` / `Other apps` series |
 | `history.statusCharge` | History status bar battery charge block |
 | `history.statusHealth` | History status bar battery health block |
 | `history.statusTemp` | History status bar battery temperature block |
@@ -319,6 +323,35 @@ Legend buttons announce highlighted status. Hardware breakdown rows group
 channel metrics into single VoiceOver elements expressing relative magnitudes of
 the largest hardware channel, and app breakdown rows expose per-app
 accessibility identifiers.
+
+### Keyboard focus and hit targets
+
+Keyboard-only users must be able to reach everything in History. The window
+content exposes one Tab stop per region instead of one per row: the time-range
+control, Display options menu, and Export action in the toolbar, the chart time
+inspector, each legend chip, the System processes disclosure, and the heading of
+each breakdown column (`history.energyBreakdown`, `history.appBreakdown`).
+Rows inside the two columns stay out of the Tab ring so the ring does not grow
+with the number of recorded apps; VoiceOver and Switch Control still reach them
+individually.
+
+Legend chips are caption-sized on screen, so each chip is padded vertically to
+`AccessibilityMetrics.minimumTargetSize` (24 pt) and takes pointer hits across
+its whole padded width.
+
+Toolbar controls live in the AppKit toolbar, which macOS reaches with the
+system's "Move focus to the toolbar" shortcut rather than with Tab. They are
+marked focusable so a future focus-ring change cannot silently exclude them,
+but the shortcut is the supported keyboard path to the time range, Display
+options, and Export.
+
+Controls must present one accessible element, not a parent and child that
+announce the same name and identifier. The Export action therefore hides its
+caption from the accessibility tree and keeps a single `history.exportCSV`
+identifier, and the caption stays visible on screen. The Display menu is named
+"Display options" and speaks the state of its one toggle instead of an
+unrelated default value. The System processes row joins its caption with a
+colon rather than nesting parentheses around numbers that already carry them.
 
 ### Chart hover behavior (v0.5.2)
 

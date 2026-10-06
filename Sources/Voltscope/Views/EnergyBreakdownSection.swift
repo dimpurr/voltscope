@@ -39,7 +39,12 @@ struct EnergyBreakdownSection: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
             Spacer()
-        }.help(String(format: "Independent hardware channels, potentially overlapping. Observed battery discharge: %.2f Wh; charging, supply transitions and sampling gaps excluded.", totalDrainJ / 3600))
+        }
+        .help(String(format: "Independent hardware channels, potentially overlapping. Observed battery discharge: %.2f Wh; charging, supply transitions and sampling gaps excluded.", totalDrainJ / 3600))
+        // One keyboard entry point for the whole column: the rows below stay
+        // out of the Tab ring so it does not grow with the channel count.
+        .focusable()
+        .accessibilityIdentifier(AccessibilityIdentifiers.historyEnergyBreakdown)
     }
 
     private var headerSubtitle: String { "· hardware" }

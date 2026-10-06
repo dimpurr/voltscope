@@ -132,10 +132,19 @@ struct HistoryWindow: View {
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            Picker("Time range", selection: $range) { ForEach(Range.allCases) { Text($0.rawValue).tag($0) } }
+            Picker("Time range", selection: $range) {
+                ForEach(Range.allCases) { option in
+                    // The wrapper identifier stays on the radio group; per-segment
+                    // identifiers keep every range addressable on its own.
+                    Text(option.rawValue)
+                        .accessibilityIdentifier(AccessibilityIdentifiers.historyTimeRangeOption(option))
+                        .tag(option)
+                }
+            }
                 .pickerStyle(.segmented).frame(minWidth: 280)
                 .accessibilityLabel("Time range")
                 .accessibilityIdentifier(AccessibilityIdentifiers.historyTimeRange)
+                .focusable()
                 .onChange(of: range) { _ in rangeManuallyChosen = true }
         }
         ToolbarItem(placement: .principal) {
@@ -144,20 +153,32 @@ struct HistoryWindow: View {
                     .accessibilityLabel("Group system processes")
                     .accessibilityIdentifier(AccessibilityIdentifiers.historyGroupSystemProcesses)
             } label: { Label("Display", systemImage: "slider.horizontal.3") }
-                .menuIndicator(.visible).help("Display options")
-                .accessibilityLabel("Display options")
+                .menuIndicator(.visible).help(AccessibilityLabels.displayOptionsName)
+                .accessibilityLabel(AccessibilityLabels.displayOptionsName)
+                // Without an explicit value the menu announced a stray "Edit"
+                // that does not appear on screen. Speak the toggle state instead.
+                .accessibilityValue(AccessibilityLabels.displayOptionsValue(groupSystemProcesses: groupSystem))
                 .accessibilityIdentifier(AccessibilityIdentifiers.historyDisplayOptions)
+                .focusable()
         }
         ToolbarItem(placement: .primaryAction) {
             Button {
                 if isExporting { exportTask?.cancel() } else { exportCurrent() }
             } label: {
-                Label(isExporting ? "Cancel Export" : "Export as CSV…",
-                      systemImage: isExporting ? "xmark.circle" : "square.and.arrow.up")
+                // The caption is still drawn, but keeping it out of the
+                // accessibility tree stops SwiftUI from promoting it into a
+                // second button element that repeats the name and identifier.
+                Label {
+                    Text(isExporting ? "Cancel Export" : "Export as CSV…")
+                        .accessibilityHidden(true)
+                } icon: {
+                    Image(systemName: isExporting ? "xmark.circle" : "square.and.arrow.up")
+                }
             }
                 .disabled(!isExporting && (!loaded || appState.database == nil))
                 .accessibilityLabel(isExporting ? "Cancel CSV export" : "Export as CSV")
                 .accessibilityIdentifier(AccessibilityIdentifiers.historyExportCSV)
+                .focusable()
         }
     }
 

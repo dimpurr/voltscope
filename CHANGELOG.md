@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Improve keyboard and screen-reader access to the History window: the time range, Display options, and Export controls, both breakdown columns, and the System processes row join the keyboard focus order, the Export control is announced once instead of twice, the Display menu announces the state of its toggle instead of an unrelated word, chart legend chips are large enough to hit and carry stable identifiers, and the grouped System processes row no longer repeats its numbers inside a second set of parentheses.
+
 ## 0.10.3 — 2026-10-04
 
 - Add accessibility label, value, and stable identifier to the menu bar status item.

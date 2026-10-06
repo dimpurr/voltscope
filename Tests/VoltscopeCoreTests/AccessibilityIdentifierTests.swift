@@ -16,6 +16,8 @@ final class AccessibilityIdentifierTests: XCTestCase {
             AccessibilityIdentifiers.historyExportCSV,
             AccessibilityIdentifiers.historyClearAppSelection,
             AccessibilityIdentifiers.historySystemProcesses,
+            AccessibilityIdentifiers.historyEnergyBreakdown,
+            AccessibilityIdentifiers.historyAppBreakdown,
             AccessibilityIdentifiers.historyChartBattery,
             AccessibilityIdentifiers.historyChartEnergy,
             AccessibilityIdentifiers.historyStatusCharge,
@@ -48,6 +50,8 @@ final class AccessibilityIdentifierTests: XCTestCase {
             "history.exportCSV",
             "history.clearAppSelection",
             "history.systemProcesses",
+            "history.energyBreakdown",
+            "history.appBreakdown",
             "history.chartBattery",
             "history.chartEnergy",
             "history.statusCharge",
@@ -152,5 +156,76 @@ final class AccessibilityIdentifierTests: XCTestCase {
         XCTAssertEqual(AccessibilityLabels.legendSelectionValue(selected: true, anySelected: true), "Highlighted")
         XCTAssertEqual(AccessibilityLabels.legendSelectionValue(selected: false, anySelected: true), "Muted")
         XCTAssertEqual(AccessibilityLabels.legendSelectionValue(selected: false, anySelected: false), "All apps shown")
+    }
+
+    func testTimeRangeOptionIdentifiersAddressEveryRangeIndividually() {
+        let identifiers = HistoryRange.allCases.map(AccessibilityIdentifiers.historyTimeRangeOption)
+
+        XCTAssertEqual(identifiers, [
+            "history.timeRange.Live",
+            "history.timeRange.1H",
+            "history.timeRange.6H",
+            "history.timeRange.24H",
+            "history.timeRange.7D"
+        ])
+        XCTAssertEqual(identifiers.count, Set(identifiers).count)
+        // The picker wrapper keeps the group identifier, so segment identifiers
+        // must not collide with it.
+        XCTAssertFalse(identifiers.contains(AccessibilityIdentifiers.historyTimeRange))
+    }
+
+    func testLegendChipIdentifiersUseStableSeriesIdentity() {
+        XCTAssertEqual(
+            AccessibilityIdentifiers.historyLegendChip(seriesID: "com.google.Chrome"),
+            "history.legend.com.google.Chrome"
+        )
+        XCTAssertEqual(
+            AccessibilityIdentifiers.historyLegendChip(seriesID: HistoryChartModel.systemID),
+            "history.legend.voltscope:group:system"
+        )
+        XCTAssertEqual(
+            AccessibilityIdentifiers.historyLegendChip(seriesID: HistoryChartModel.otherID),
+            "history.legend.voltscope:group:other"
+        )
+        XCTAssertNotEqual(
+            AccessibilityIdentifiers.historyLegendChip(seriesID: "com.google.Chrome"),
+            AccessibilityIdentifiers.historyLegendChip(seriesID: "com.google.Chrome.helper")
+        )
+    }
+
+    func testMinimumTargetSizeMeetsTheDocumentedMinimum() {
+        // WCAG 2.2 SC 2.5.8 asks for 24 by 24; the legend chips are padded to
+        // this value so caption-sized rows still meet it.
+        XCTAssertEqual(AccessibilityMetrics.minimumTargetSize, 24)
+    }
+
+    func testSystemProcessesGroupLabelDoesNotDoubleUpParentheses() {
+        XCTAssertEqual(
+            AccessibilityLabels.systemProcessesGroupLabel(summary: "(576 procs · 109427.9 J · 49%)"),
+            "System processes: 576 procs · 109427.9 J · 49%"
+        )
+        XCTAssertEqual(
+            AccessibilityLabels.systemProcessesGroupLabel(summary: "(12 procs · ranked by CPU time)"),
+            "System processes: 12 procs · ranked by CPU time"
+        )
+    }
+
+    func testUnparenthesizedLeavesPlainTextAlone() {
+        XCTAssertEqual(AccessibilityLabels.unparenthesized("0 procs"), "0 procs")
+        XCTAssertEqual(AccessibilityLabels.unparenthesized("("), "(")
+        XCTAssertEqual(AccessibilityLabels.unparenthesized("(wrapped)"), "wrapped")
+        XCTAssertEqual(AccessibilityLabels.unparenthesized("(a) (b)"), "a) (b")
+    }
+
+    func testDisplayOptionsSpokenNameAndValue() {
+        XCTAssertEqual(AccessibilityLabels.displayOptionsName, "Display options")
+        XCTAssertEqual(
+            AccessibilityLabels.displayOptionsValue(groupSystemProcesses: true),
+            "System processes grouped"
+        )
+        XCTAssertEqual(
+            AccessibilityLabels.displayOptionsValue(groupSystemProcesses: false),
+            "System processes listed individually"
+        )
     }
 }

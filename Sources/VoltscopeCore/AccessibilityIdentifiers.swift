@@ -1,3 +1,5 @@
+import Foundation
+
 /// Stable accessibility identifiers used by the macOS UI and UI automation.
 /// Treat these values as a public interface: do not rename them casually.
 public enum AccessibilityIdentifiers {
@@ -11,13 +13,29 @@ public enum AccessibilityIdentifiers {
         "menu.openAppInHistory.\(appIdentity)"
     }
     public static let historyTimeRange = "history.timeRange"
+    /// Per-segment identifier for the segmented time control, so automation can
+    /// reach a single range even when the `Picker` wrapper keeps its own
+    /// identifier on the surrounding radio group.
+    public static func historyTimeRangeOption(_ range: HistoryRange) -> String {
+        "history.timeRange.\(range.rawValue)"
+    }
     public static let historyDisplayOptions = "history.displayOptions"
     public static let historyGroupSystemProcesses = "history.groupSystemProcesses"
     public static let historyExportCSV = "history.exportCSV"
     public static let historyClearAppSelection = "history.clearAppSelection"
     public static let historySystemProcesses = "history.systemProcesses"
+    /// Keyboard focus sections for the two breakdown columns under the chart.
+    /// One stop per column keeps the Tab ring short while still letting a
+    /// keyboard-only user reach both lists.
+    public static let historyEnergyBreakdown = "history.energyBreakdown"
+    public static let historyAppBreakdown = "history.appBreakdown"
     public static let historyChartBattery = "history.chartBattery"
     public static let historyChartEnergy = "history.chartEnergy"
+    /// Legend chip identifier; `<series-id>` is the stable app identity, or
+    /// `System` / `Other apps` for the aggregated rows.
+    public static func historyLegendChip(seriesID: String) -> String {
+        "history.legend.\(seriesID)"
+    }
     public static let historyStatusCharge = "history.statusCharge"
     public static let historyStatusHealth = "history.statusHealth"
     public static let historyStatusTemp = "history.statusTemp"
@@ -34,6 +52,16 @@ public enum AccessibilityIdentifiers {
     public static let welcomeDone = "welcome.done"
     public static let welcomeOpenLoginItems = "welcome.openLoginItems"
     public static let welcomeEnableAtLogin = "welcome.enableAtLogin"
+}
+
+/// Shared hit-target geometry so controls can meet one documented minimum
+/// instead of each view picking its own padding.
+public enum AccessibilityMetrics {
+    /// Minimum pointer and keyboard target size in points.
+    ///
+    /// WCAG 2.2 SC 2.5.8 Target Size (Minimum) asks for 24 by 24 CSS pixels,
+    /// which matches the macOS HIG minimum control height.
+    public static let minimumTargetSize: CGFloat = 24
 }
 
 /// Spoken accessibility text for controls whose labels explain dynamic state.
@@ -82,5 +110,31 @@ public enum AccessibilityLabels {
     public static func legendSelectionValue(selected: Bool, anySelected: Bool) -> String {
         if selected { return "Highlighted" }
         return anySelected ? "Muted" : "All apps shown"
+    }
+
+    /// Spoken name for the History Display menu.
+    ///
+    /// The control is an icon-only toolbar menu, so its name has to be supplied
+    /// instead of read from the visible "Display" caption.
+    public static let displayOptionsName = "Display options"
+
+    /// Dynamic value for the Display menu: the state of the one toggle it holds.
+    public static func displayOptionsValue(groupSystemProcesses: Bool) -> String {
+        groupSystemProcesses ? "System processes grouped" : "System processes listed individually"
+    }
+
+    /// Label for the grouped system-processes row.
+    ///
+    /// The on-screen caption already wraps its own numbers in parentheses, so
+    /// the spoken label joins them with a colon instead of adding a second
+    /// layer of punctuation.
+    public static func systemProcessesGroupLabel(summary: String) -> String {
+        "System processes: \(unparenthesized(summary))"
+    }
+
+    /// Removes one wrapping pair of parentheses, leaving the text unchanged.
+    public static func unparenthesized(_ text: String) -> String {
+        guard text.hasPrefix("("), text.hasSuffix(")"), text.count > 1 else { return text }
+        return String(text.dropFirst().dropLast())
     }
 }
