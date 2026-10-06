@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Accessibility: each History chart is now one VoiceOver stop with a spoken
+  title, summary, audio-graph descriptor, and stable identifier, instead of
+  exposing every data point as a separate unnamed element.
+- Accessibility: History chart series colors now keep at least 3:1 contrast
+  against the window background in light and dark appearances, the System and
+  Other apps grays are clearly separated, and the charging green used for the
+  `Charging` caption keeps at least 4.5:1. App colors stay stable per bundle
+  identity.
+
 ## 0.10.3 — 2026-10-04
 
 - Add accessibility label, value, and stable identifier to the menu bar status item.
