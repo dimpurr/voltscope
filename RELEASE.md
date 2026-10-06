@@ -100,5 +100,10 @@ the final network gate below passes.
     update path. Candidate QA before publication is useful, but it cannot
     replace this step.
 
+11. Remove the local `build/Voltscope.app` (and any other unpublished copies)
+    from the release Mac once the gate passes. Every copy with the same bundle
+    identifier shows up in Spotlight and Launch Services, so an old or
+    candidate copy can be launched by mistake next to the installed app.
+
 Never claim notarization unless `notarytool` accepted the artifact and the
 ticket was stapled and validated. Never store release secrets in this repository.
