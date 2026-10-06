@@ -123,36 +123,26 @@ public enum AccessibilityLabels {
         groupSystemProcesses ? "System processes grouped" : "System processes listed individually"
     }
 
-    /// Label for the grouped system-processes row.
+    /// Spoken label for the grouped system-processes row.
     ///
-    /// The on-screen caption already wraps its own numbers in parentheses, so
-    /// the spoken label joins them with a colon instead of adding a second
-    /// layer of punctuation.
-    public static func systemProcessesGroupLabel(summary: String) -> String {
-        "System processes: \(unparenthesized(summary))"
+    /// The on-screen caption is a compact `(count · joules · percent)` summary.
+    /// The spoken label expands it so VoiceOver states that the joules and the
+    /// percentage both refer to recorded App CPU energy, not whole-device
+    /// battery drain. `percent` is `nil` when no recorded energy exists to take
+    /// a share of.
+    public static func systemProcessesGroupLabel(count: Int, joules: Double, percent: Double?) -> String {
+        let processes = count == 1 ? "1 process" : "\(count) processes"
+        let energy = "\(String(format: "%.1f", joules)) joules of recorded App CPU energy"
+        guard let percent else {
+            return "System processes: \(processes), \(energy)"
+        }
+        return "System processes: \(processes), \(energy), \(Int(percent.rounded())) percent of recorded App CPU energy"
     }
 
-    /// Removes one wrapping pair of parentheses, leaving the text unchanged.
-    ///
-    /// The parentheses must wrap the whole string. Text such as `"(a) (b)"` is
-    /// two independent groups, not one wrapping pair, and is returned as-is.
-    public static func unparenthesized(_ text: String) -> String {
-        guard text.hasPrefix("("), text.hasSuffix(")"), text.count > 1 else { return text }
-        var depth = 0
-        for index in text.indices {
-            switch text[index] {
-            case "(":
-                depth += 1
-            case ")":
-                depth -= 1
-                if depth == 0 && index != text.index(before: text.endIndex) {
-                    return text
-                }
-            default:
-                break
-            }
-        }
-        guard depth == 0 else { return text }
-        return String(text.dropFirst().dropLast())
+    /// Spoken label for the grouped system-processes row when per-process
+    /// energy is unavailable (Intel Macs), where the row ranks by CPU time.
+    public static func systemProcessesGroupLabel(count: Int) -> String {
+        let processes = count == 1 ? "1 process" : "\(count) processes"
+        return "System processes: \(processes), ranked by CPU time"
     }
 }

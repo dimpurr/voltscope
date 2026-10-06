@@ -350,9 +350,10 @@ both the `NSToolbarItem` wrapper and an inner button, so the Export action is
 built on `NSButton`, which is a single element with one `history.exportCSV`
 identifier. The Display menu is built on `NSPopUpButton` so its spoken name is
 "Display options" rather than the toolbar menu's default "Edit" title, and it
-speaks the state of its one toggle. The System processes row joins its caption
-with a colon rather than nesting parentheses around numbers that already carry
-them.
+speaks the state of its one toggle. The System processes row speaks its process
+count, its recorded App CPU energy in joules, and that amount's share of
+recorded App CPU energy, so it is not mistaken for a share of whole-device
+battery drain.
 
 ### Chart hover behavior (v0.5.2)
 

@@ -165,6 +165,7 @@ struct HistoryWindow: View {
             // toolbar wrapper plus an inner SwiftUI button (audit F-06).
             ToolbarButton(
                 systemImage: isExporting ? "xmark.circle" : "square.and.arrow.up",
+                title: isExporting ? "Cancel Export" : "Export as CSV…",
                 accessibilityLabel: isExporting ? "Cancel CSV export" : "Export as CSV",
                 identifier: AccessibilityIdentifiers.historyExportCSV,
                 isEnabled: isExporting || (loaded && appState.database != nil),

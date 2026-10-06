@@ -206,8 +206,17 @@ private struct SystemGroupSection: View {
         }
         .padding(.top, 6)
         .focusable()
-        .accessibilityLabel(AccessibilityLabels.systemProcessesGroupLabel(summary: summary))
+        .accessibilityLabel(spokenLabel)
         .accessibilityIdentifier(AccessibilityIdentifiers.historySystemProcesses)
+    }
+
+    private var spokenLabel: String {
+        guard energyAvailable else {
+            return AccessibilityLabels.systemProcessesGroupLabel(count: entries.count)
+        }
+        let j = Double(summed) / 1_000_000_000.0
+        let percent = totalAll > 0 ? Double(summed) / Double(totalAll) * 100 : nil
+        return AccessibilityLabels.systemProcessesGroupLabel(count: entries.count, joules: j, percent: percent)
     }
 
     private var summed: Int64 {

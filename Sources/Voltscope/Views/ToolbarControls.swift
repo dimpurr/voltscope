@@ -10,6 +10,9 @@ import SwiftUI
 /// toolbar exposes as a single accessible element.
 struct ToolbarButton: NSViewRepresentable {
     let systemImage: String
+    /// Visible button caption. UI_SPEC requires the Export control to name its
+    /// output format on screen, so the title is not folded into the icon.
+    let title: String
     let accessibilityLabel: String
     let identifier: String
     var isEnabled: Bool = true
@@ -20,7 +23,7 @@ struct ToolbarButton: NSViewRepresentable {
     func makeNSView(context: Context) -> NSButton {
         let button = NSButton()
         button.bezelStyle = .texturedRounded
-        button.imagePosition = .imageOnly
+        button.imagePosition = .imageLeading
         button.target = context.coordinator
         button.action = #selector(Coordinator.fire)
         return button
@@ -28,7 +31,10 @@ struct ToolbarButton: NSViewRepresentable {
 
     func updateNSView(_ button: NSButton, context: Context) {
         context.coordinator.action = action
-        button.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: accessibilityLabel)
+        // The visible title carries the meaning, so the symbol is decorative
+        // and gets no accessibility description of its own.
+        button.image = NSImage(systemSymbolName: systemImage, accessibilityDescription: nil)
+        button.title = title
         button.isEnabled = isEnabled
         button.toolTip = accessibilityLabel
         button.setAccessibilityLabel(accessibilityLabel)

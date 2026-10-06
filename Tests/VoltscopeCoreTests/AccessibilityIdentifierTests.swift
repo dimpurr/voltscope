@@ -199,24 +199,25 @@ final class AccessibilityIdentifierTests: XCTestCase {
         XCTAssertEqual(AccessibilityMetrics.minimumTargetSize, 24)
     }
 
-    func testSystemProcessesGroupLabelDoesNotDoubleUpParentheses() {
+    func testSystemProcessesGroupLabelQualifiesEnergyAndShare() {
+        // The spoken summary must name recorded App CPU energy and say the
+        // percentage is a share of that total, never whole-device drain.
         XCTAssertEqual(
-            AccessibilityLabels.systemProcessesGroupLabel(summary: "(576 procs · 109427.9 J · 49%)"),
-            "System processes: 576 procs · 109427.9 J · 49%"
+            AccessibilityLabels.systemProcessesGroupLabel(count: 647, joules: 109_427.9, percent: 49),
+            "System processes: 647 processes, 109427.9 joules of recorded App CPU energy, 49 percent of recorded App CPU energy"
         )
         XCTAssertEqual(
-            AccessibilityLabels.systemProcessesGroupLabel(summary: "(12 procs · ranked by CPU time)"),
-            "System processes: 12 procs · ranked by CPU time"
+            AccessibilityLabels.systemProcessesGroupLabel(count: 1, joules: 2.5, percent: 1),
+            "System processes: 1 process, 2.5 joules of recorded App CPU energy, 1 percent of recorded App CPU energy"
         )
-    }
-
-    func testUnparenthesizedLeavesPlainTextAlone() {
-        XCTAssertEqual(AccessibilityLabels.unparenthesized("0 procs"), "0 procs")
-        XCTAssertEqual(AccessibilityLabels.unparenthesized("("), "(")
-        XCTAssertEqual(AccessibilityLabels.unparenthesized("(wrapped)"), "wrapped")
-        // Two independent groups are not one wrapping pair and must survive.
-        XCTAssertEqual(AccessibilityLabels.unparenthesized("(a) (b)"), "(a) (b)")
-        XCTAssertEqual(AccessibilityLabels.unparenthesized("(a)(b)"), "(a)(b)")
+        XCTAssertEqual(
+            AccessibilityLabels.systemProcessesGroupLabel(count: 647, joules: 109_427.9, percent: nil),
+            "System processes: 647 processes, 109427.9 joules of recorded App CPU energy"
+        )
+        XCTAssertEqual(
+            AccessibilityLabels.systemProcessesGroupLabel(count: 12),
+            "System processes: 12 processes, ranked by CPU time"
+        )
     }
 
     func testDisplayOptionsSpokenNameAndValue() {
