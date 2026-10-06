@@ -135,10 +135,16 @@ struct EnergyStackedChart: View {
                         Text(series.name).lineLimit(1).frame(maxWidth: 140, alignment: .leading)
                     }
                     .opacity(selectedApp == nil || isSelected ? 1 : 0.45)
+                    // The caption is 13 pt tall, well under the minimum target
+                    // size, so the chip grows vertically and keeps the whole
+                    // padded row clickable.
+                    .frame(minHeight: AccessibilityMetrics.minimumTargetSize)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .help(series.name)
                 .accessibilityLabel(series.name)
+                .accessibilityIdentifier(AccessibilityIdentifiers.historyLegendChip(seriesID: id))
                 .accessibilityValue(AccessibilityLabels.legendSelectionValue(selected: isSelected, anySelected: selectedApp != nil))
                 .accessibilityAddTraits(isSelected ? [.isSelected] : [])
                 .accessibilityHint(isSelected ? "Double tap to clear app highlight" : "Double tap to highlight app in chart")

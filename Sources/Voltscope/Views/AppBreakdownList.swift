@@ -20,6 +20,11 @@ struct AppBreakdownList: View {
                 .font(.callout.bold())
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 2)
+                // One keyboard entry point for the whole column: the rows below
+                // stay out of the Tab ring so it does not grow with the number
+                // of recorded apps.
+                .focusable()
+                .accessibilityIdentifier(AccessibilityIdentifiers.historyAppBreakdown)
 
             ForEach(userEntries) { entry in
                 AppRow(
@@ -200,8 +205,18 @@ private struct SystemGroupSection: View {
             }
         }
         .padding(.top, 6)
-        .accessibilityLabel("System processes, \(summary)")
+        .focusable()
+        .accessibilityLabel(spokenLabel)
         .accessibilityIdentifier(AccessibilityIdentifiers.historySystemProcesses)
+    }
+
+    private var spokenLabel: String {
+        guard energyAvailable else {
+            return AccessibilityLabels.systemProcessesGroupLabel(count: entries.count)
+        }
+        let j = Double(summed) / 1_000_000_000.0
+        let percent = totalAll > 0 ? Double(summed) / Double(totalAll) * 100 : nil
+        return AccessibilityLabels.systemProcessesGroupLabel(count: entries.count, joules: j, percent: percent)
     }
 
     private var summed: Int64 {

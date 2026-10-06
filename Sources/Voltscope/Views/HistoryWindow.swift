@@ -132,32 +132,47 @@ struct HistoryWindow: View {
 
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            Picker("Time range", selection: $range) { ForEach(Range.allCases) { Text($0.rawValue).tag($0) } }
+            Picker("Time range", selection: $range) {
+                ForEach(Range.allCases) { option in
+                    // The wrapper identifier stays on the radio group; per-segment
+                    // identifiers keep every range addressable on its own.
+                    Text(option.rawValue)
+                        .accessibilityIdentifier(AccessibilityIdentifiers.historyTimeRangeOption(option))
+                        .tag(option)
+                }
+            }
                 .pickerStyle(.segmented).frame(minWidth: 280)
                 .accessibilityLabel("Time range")
                 .accessibilityIdentifier(AccessibilityIdentifiers.historyTimeRange)
                 .onChange(of: range) { _ in rangeManuallyChosen = true }
         }
         ToolbarItem(placement: .principal) {
-            Menu {
-                Toggle("Group system processes", isOn: $groupSystem)
-                    .accessibilityLabel("Group system processes")
-                    .accessibilityIdentifier(AccessibilityIdentifiers.historyGroupSystemProcesses)
-            } label: { Label("Display", systemImage: "slider.horizontal.3") }
-                .menuIndicator(.visible).help("Display options")
-                .accessibilityLabel("Display options")
-                .accessibilityIdentifier(AccessibilityIdentifiers.historyDisplayOptions)
+            // AppKit-backed so the spoken name is "Display options" rather than
+            // the toolbar menu's default "Edit" title (audit F-18).
+            ToolbarMenu(
+                systemImage: "slider.horizontal.3",
+                accessibilityLabel: AccessibilityLabels.displayOptionsName,
+                accessibilityValue: AccessibilityLabels.displayOptionsValue(groupSystemProcesses: groupSystem),
+                identifier: AccessibilityIdentifiers.historyDisplayOptions,
+                itemTitle: "Group system processes",
+                itemIdentifier: AccessibilityIdentifiers.historyGroupSystemProcesses,
+                itemIsOn: groupSystem,
+                itemAction: { groupSystem.toggle() }
+            )
         }
         ToolbarItem(placement: .primaryAction) {
-            Button {
-                if isExporting { exportTask?.cancel() } else { exportCurrent() }
-            } label: {
-                Label(isExporting ? "Cancel Export" : "Export as CSV…",
-                      systemImage: isExporting ? "xmark.circle" : "square.and.arrow.up")
-            }
-                .disabled(!isExporting && (!loaded || appState.database == nil))
-                .accessibilityLabel(isExporting ? "Cancel CSV export" : "Export as CSV")
-                .accessibilityIdentifier(AccessibilityIdentifiers.historyExportCSV)
+            // AppKit-backed so the action is one accessible button, not the
+            // toolbar wrapper plus an inner SwiftUI button (audit F-06).
+            ToolbarButton(
+                systemImage: isExporting ? "xmark.circle" : "square.and.arrow.up",
+                title: isExporting ? "Cancel Export" : "Export as CSV…",
+                accessibilityLabel: isExporting ? "Cancel CSV export" : "Export as CSV",
+                identifier: AccessibilityIdentifiers.historyExportCSV,
+                isEnabled: isExporting || (loaded && appState.database != nil),
+                action: {
+                    if isExporting { exportTask?.cancel() } else { exportCurrent() }
+                }
+            )
         }
     }
 

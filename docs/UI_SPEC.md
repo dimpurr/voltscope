@@ -270,13 +270,17 @@ Their public English values and controls are:
 | `menu.systemProcesses` | Menu bar System processes disclosure row |
 | `menu.openAppInHistory.<app-identity>` | Per-app menu row action; `<app-identity>` is the bundle identifier, or the process name when no bundle identifier is available |
 | `history.timeRange` | History time-range picker |
+| `history.timeRange.<range>` | One segment of the History time-range picker, so a single range can be addressed on its own |
 | `history.displayOptions` | History Display options menu |
 | `history.groupSystemProcesses` | Group system processes menu item |
 | `history.exportCSV` | Export as CSV action |
 | `history.clearAppSelection` | Clear selected app action |
 | `history.systemProcesses` | System processes row in the History app breakdown |
+| `history.energyBreakdown` | Keyboard entry point for the Energy breakdown column |
+| `history.appBreakdown` | Keyboard entry point for the Apps column |
 | `history.chartBattery` | History battery level chart |
 | `history.chartEnergy` | History app CPU energy stacked chart |
+| `history.legend.<series-id>` | Chart legend chip; `<series-id>` is the stable app identity, or the aggregated `System` / `Other apps` series |
 | `history.statusCharge` | History status bar battery charge block |
 | `history.statusHealth` | History status bar battery health block |
 | `history.statusTemp` | History status bar battery temperature block |
@@ -354,6 +358,37 @@ footer outside the window
 These unit tests cover the layout budget and the label strings; the SwiftUI
 wiring that applies the height and the contrast styles is verified on a real Mac,
 not in the unit suite.
+
+### Keyboard focus and hit targets
+
+Keyboard-only users must be able to reach everything in History. The window
+content exposes one Tab stop per region instead of one per row: the chart time
+inspector, each legend chip, the System processes disclosure, and the heading of
+each breakdown column (`history.energyBreakdown`, `history.appBreakdown`).
+Rows inside the two columns stay out of the Tab ring so the ring does not grow
+with the number of recorded apps; VoiceOver and Switch Control still reach them
+individually.
+
+Toolbar controls (the time range, Display options, and Export) live in the
+AppKit toolbar. On macOS the toolbar has its own key-view loop, separate from
+the window content, so Tab does not reach them; keyboard-only users open the
+toolbar with the system shortcut **Control-F5** ("Move focus to the window
+toolbar"). This is platform behavior, not an app-specific focus ring.
+
+Legend chips are caption-sized on screen, so each chip is padded vertically to
+`AccessibilityMetrics.minimumTargetSize` (24 pt) and takes pointer hits across
+its whole padded width.
+
+Controls must present one accessible element, not a parent and child that
+announce the same name and identifier. SwiftUI exposes a toolbar `Button` as
+both the `NSToolbarItem` wrapper and an inner button, so the Export action is
+built on `NSButton`, which is a single element with one `history.exportCSV`
+identifier. The Display menu is built on `NSPopUpButton` so its spoken name is
+"Display options" rather than the toolbar menu's default "Edit" title, and it
+speaks the state of its one toggle. The System processes row speaks its process
+count, its recorded App CPU energy in joules, and that amount's share of
+recorded App CPU energy, so it is not mistaken for a share of whole-device
+battery drain.
 
 ### Chart hover behavior (v0.5.2)
 
@@ -452,9 +487,9 @@ the inline system process list sits in a scroll region capped at approximately
 540 pt, while the footer actions remain visible below it. The collapsed panel
 keeps its normal compact intrinsic height.
 
-`Settings` opens the dedicated Voltscope Settings window. `Display` in the History
-toolbar remains display-only and currently contains `Group system processes`.
-Settings is not placed in that menu.
+`Settings` opens the dedicated Voltscope Settings window. The Display options
+menu in the History toolbar remains display-only and currently contains
+`Group system processes`. Settings is not placed in that menu.
 
 ### Settings window
 

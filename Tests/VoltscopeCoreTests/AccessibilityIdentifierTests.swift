@@ -16,6 +16,8 @@ final class AccessibilityIdentifierTests: XCTestCase {
             AccessibilityIdentifiers.historyExportCSV,
             AccessibilityIdentifiers.historyClearAppSelection,
             AccessibilityIdentifiers.historySystemProcesses,
+            AccessibilityIdentifiers.historyEnergyBreakdown,
+            AccessibilityIdentifiers.historyAppBreakdown,
             AccessibilityIdentifiers.historyChartBattery,
             AccessibilityIdentifiers.historyChartEnergy,
             AccessibilityIdentifiers.historyStatusCharge,
@@ -48,6 +50,8 @@ final class AccessibilityIdentifierTests: XCTestCase {
             "history.exportCSV",
             "history.clearAppSelection",
             "history.systemProcesses",
+            "history.energyBreakdown",
+            "history.appBreakdown",
             "history.chartBattery",
             "history.chartEnergy",
             "history.statusCharge",
@@ -166,5 +170,79 @@ final class AccessibilityIdentifierTests: XCTestCase {
             "the in-window heading must not repeat the window title, or VoiceOver announces it twice"
         )
         XCTAssertFalse(AccessibilityLabels.welcomeHeading.isEmpty)
+    }
+
+    func testTimeRangeOptionIdentifiersAddressEveryRangeIndividually() {
+        let identifiers = HistoryRange.allCases.map(AccessibilityIdentifiers.historyTimeRangeOption)
+
+        XCTAssertEqual(identifiers, [
+            "history.timeRange.Live",
+            "history.timeRange.1H",
+            "history.timeRange.6H",
+            "history.timeRange.24H",
+            "history.timeRange.7D"
+        ])
+        XCTAssertEqual(identifiers.count, Set(identifiers).count)
+        // The picker wrapper keeps the group identifier, so segment identifiers
+        // must not collide with it.
+        XCTAssertFalse(identifiers.contains(AccessibilityIdentifiers.historyTimeRange))
+    }
+
+    func testLegendChipIdentifiersUseStableSeriesIdentity() {
+        XCTAssertEqual(
+            AccessibilityIdentifiers.historyLegendChip(seriesID: "com.google.Chrome"),
+            "history.legend.com.google.Chrome"
+        )
+        XCTAssertEqual(
+            AccessibilityIdentifiers.historyLegendChip(seriesID: HistoryChartModel.systemID),
+            "history.legend.voltscope:group:system"
+        )
+        XCTAssertEqual(
+            AccessibilityIdentifiers.historyLegendChip(seriesID: HistoryChartModel.otherID),
+            "history.legend.voltscope:group:other"
+        )
+        XCTAssertNotEqual(
+            AccessibilityIdentifiers.historyLegendChip(seriesID: "com.google.Chrome"),
+            AccessibilityIdentifiers.historyLegendChip(seriesID: "com.google.Chrome.helper")
+        )
+    }
+
+    func testMinimumTargetSizeMeetsTheDocumentedMinimum() {
+        // WCAG 2.2 SC 2.5.8 asks for 24 by 24; the legend chips are padded to
+        // this value so caption-sized rows still meet it.
+        XCTAssertEqual(AccessibilityMetrics.minimumTargetSize, 24)
+    }
+
+    func testSystemProcessesGroupLabelQualifiesEnergyAndShare() {
+        // The spoken summary must name recorded App CPU energy and say the
+        // percentage is a share of that total, never whole-device drain.
+        XCTAssertEqual(
+            AccessibilityLabels.systemProcessesGroupLabel(count: 647, joules: 109_427.9, percent: 49),
+            "System processes: 647 processes, 109427.9 joules of recorded App CPU energy, 49 percent of recorded App CPU energy"
+        )
+        XCTAssertEqual(
+            AccessibilityLabels.systemProcessesGroupLabel(count: 1, joules: 2.5, percent: 1),
+            "System processes: 1 process, 2.5 joules of recorded App CPU energy, 1 percent of recorded App CPU energy"
+        )
+        XCTAssertEqual(
+            AccessibilityLabels.systemProcessesGroupLabel(count: 647, joules: 109_427.9, percent: nil),
+            "System processes: 647 processes, 109427.9 joules of recorded App CPU energy"
+        )
+        XCTAssertEqual(
+            AccessibilityLabels.systemProcessesGroupLabel(count: 12),
+            "System processes: 12 processes, ranked by CPU time"
+        )
+    }
+
+    func testDisplayOptionsSpokenNameAndValue() {
+        XCTAssertEqual(AccessibilityLabels.displayOptionsName, "Display options")
+        XCTAssertEqual(
+            AccessibilityLabels.displayOptionsValue(groupSystemProcesses: true),
+            "System processes grouped"
+        )
+        XCTAssertEqual(
+            AccessibilityLabels.displayOptionsValue(groupSystemProcesses: false),
+            "System processes listed individually"
+        )
     }
 }
