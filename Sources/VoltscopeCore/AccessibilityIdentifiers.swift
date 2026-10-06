@@ -93,8 +93,10 @@ public enum AccessibilityLabels {
     /// takes focus.
     public static let welcomeWindowTitle = "Welcome to Voltscope"
 
-    /// In-window Welcome heading. It repeats `welcomeWindowTitle` on purpose:
-    /// the heading trait turns it into a navigation landmark instead of a
-    /// third unlabelled stop in the reading order.
-    public static let welcomeHeading = "Welcome to Voltscope"
+    /// In-window Welcome heading. It deliberately differs from
+    /// `welcomeWindowTitle`: repeating the window title here made assistive
+    /// technology announce the same sentence twice, and the heading trait did
+    /// not remove the duplicate. The heading carries the window's message and
+    /// is announced once as a navigation landmark.
+    public static let welcomeHeading = "Keep your energy history complete"
 }

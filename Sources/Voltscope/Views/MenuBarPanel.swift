@@ -9,13 +9,13 @@ struct MenuBarPanel: View {
     @State private var systemExpanded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: MenuBarPanelLayout.blockSpacing) {
             panelContent
             footer
         }
-        .padding(14)
-        .frame(width: 340, alignment: .top)
-        .frame(minHeight: 428, alignment: .top)
+        .padding(MenuBarPanelLayout.outerPadding)
+        .frame(width: MenuBarPanelLayout.width, alignment: .top)
+        .frame(minHeight: MenuBarPanelLayout.maximumCollapsedHeight, alignment: .top)
         .background {
             PanelWindowName(title: AccessibilityLabels.panelWindowTitle)
         }
@@ -39,7 +39,7 @@ struct MenuBarPanel: View {
     }
 
     private var panelContentStack: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: MenuBarPanelLayout.blockSpacing) {
             chargeHeader
             Divider()
             healthSection
@@ -202,7 +202,7 @@ struct MenuBarPanel: View {
     // MARK: - Top apps section
 
     private var topAppsSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: MenuBarPanelLayout.appRowSpacing) {
             Text(appState.processEnergyAvailable ? "Top energy use (last 30 min)" : "Top CPU time (last 30 min)")
                 .font(.caption)
                 .foregroundStyle(Color.accessibleSecondary)
@@ -271,7 +271,7 @@ struct MenuBarPanel: View {
             openWindow(id: "history")
             NSApp.activate(ignoringOtherApps: true)
         }
-        .frame(minHeight: HitTarget.minimumSide)
+        .frame(minHeight: MenuBarPanelLayout.appRowHeight)
     }
 
     private func rowTooltip(_ row: HistoryDatabase.TopAppEnergy) -> String {

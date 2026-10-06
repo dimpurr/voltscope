@@ -346,6 +346,15 @@ The menu bar panel window is named `Voltscope` for assistive technology, because
 menu bar popover window carries no title of its own
 ([test: AccessibilityIdentifierTests.testPanelWindowTitleNamesTheMenuBarPanel]).
 
+The panel's minimum height is the sum of its measured blocks, including the
+footer row that carries the version label, so enlarging a control cannot push the
+footer outside the window
+([test: MenuBarPanelLayoutTests.testCollapsedPanelHeightIsTheSumOfItsMeasuredBlocks],
+[test: MenuBarPanelLayoutTests.testCollapsedPanelIsTallerThanThePreFixFixedHeight]).
+These unit tests cover the layout budget and the label strings; the SwiftUI
+wiring that applies the height and the contrast styles is verified on a real Mac,
+not in the unit suite.
+
 ### Chart hover behavior (v0.5.2)
 
 Stacked bars are colored by app via `foregroundStyle(by:)`, which makes glance-interpretation hard once more than three apps are present — the legend becomes a memory-aid lookup table. Keep the hover detail contextual to the selected bucket:
@@ -424,8 +433,14 @@ section above remains current for History content and range behavior.
 
 ### Menubar dropdown actions
 
-The dropdown is approximately 340 pt wide and about 428 to 434 pt tall at its
-normal content size. `Open History` is a full-width primary row with a neutral
+The dropdown is 340 pt wide and reserves a minimum height that fits its largest
+collapsed content — five app rows, the `System` row, and the footer — so the
+`Settings` / `Check for Updates vX.Y.Z` / `Quit` row and the version label are
+always visible. The height is derived from the measured blocks in
+`MenuBarPanelLayout` rather than a hard-coded value, because the `MenuBarExtra`
+window is sized once at first display
+([test: MenuBarPanelLayoutTests.testCollapsedPanelHeightIsTheSumOfItsMeasuredBlocks]).
+`Open History` is a full-width primary row with a neutral
 system background, a chart icon, and an optional trailing open-window icon. It
 appears below the informational content and above a secondary row. The
 secondary row keeps `Settings`, `Check for Updates vX.Y.Z`, and `Quit` together in one
@@ -460,7 +475,7 @@ may show a separate Welcome window. Sampling initialization and this window
 start independently. The window uses this copy:
 
 - Title: `Welcome to Voltscope`
-- Headline: `Keep your energy history complete`
+- Heading: `Keep your energy history complete`
 - Explanation: Voltscope records energy only while it is running. Enabling
   Launch at login keeps history continuous. The choice can be changed later
   in Settings.
@@ -468,10 +483,10 @@ start independently. The window uses this copy:
 
 Closing the window or pressing Escape has the same effect as `Not Now`. The
 choice is recorded once in a UserDefaults onboarding marker. That marker does
-not store the toggle value. The in-window heading repeats the window title and
-carries the heading trait, so assistive technology announces it as a navigation
-landmark instead of an extra stop in the reading order
-([test: AccessibilityIdentifierTests.testWelcomeHeadingMatchesTheWelcomeWindowTitle]). If registration reaches `requiresApproval`, the
+not store the toggle value. The in-window heading differs from the window title
+and carries the heading trait, so assistive technology announces it once as a
+navigation landmark instead of repeating the title
+([test: AccessibilityIdentifierTests.testWelcomeHeadingDiffersFromTheWelcomeWindowTitle]). If registration reaches `requiresApproval`, the
 primary action becomes `Open Login Items` and the window explains the next
 step. Opening Login Items does not complete or dismiss Welcome: it remains as a
 temporary floating context window while System Settings is open. When the user

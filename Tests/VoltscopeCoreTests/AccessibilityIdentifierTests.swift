@@ -158,8 +158,13 @@ final class AccessibilityIdentifierTests: XCTestCase {
         XCTAssertEqual(AccessibilityLabels.panelWindowTitle, "Voltscope")
     }
 
-    func testWelcomeHeadingMatchesTheWelcomeWindowTitle() {
+    func testWelcomeHeadingDiffersFromTheWelcomeWindowTitle() {
         XCTAssertEqual(AccessibilityLabels.welcomeWindowTitle, "Welcome to Voltscope")
-        XCTAssertEqual(AccessibilityLabels.welcomeHeading, AccessibilityLabels.welcomeWindowTitle)
+        XCTAssertNotEqual(
+            AccessibilityLabels.welcomeHeading,
+            AccessibilityLabels.welcomeWindowTitle,
+            "the in-window heading must not repeat the window title, or VoiceOver announces it twice"
+        )
+        XCTAssertFalse(AccessibilityLabels.welcomeHeading.isEmpty)
     }
 }

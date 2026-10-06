@@ -135,8 +135,6 @@ private struct WelcomeWindow: View {
                 Text(AccessibilityLabels.welcomeHeading)
                     .font(.title2.weight(.semibold))
                     .accessibilityAddTraits(.isHeader)
-                Text("Keep your energy history complete")
-                    .font(.headline)
                 Text("Voltscope records energy only while it is running. Enable Launch at login to keep your history continuous. You can change this later in Settings.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
