@@ -131,14 +131,26 @@ public struct CommandLineToolLink: Equatable, Sendable {
         return status()
     }
 
-    /// Removes the link. Idempotent, and it removes only the link: the helper in
-    /// the bundle and anything else the link pointed at stay on disk.
+    /// Removes the link, and only the link this app made.
+    ///
+    /// Nothing at all is not an error, so uninstalling twice is safe. Anything
+    /// else at the path is left exactly where it is and reported: a link to
+    /// another command may be one the user built by hand, and an item that is not
+    /// a link is never the app's to delete. The helper in the bundle and anything
+    /// a removed link pointed at stay on disk.
     public func uninstall() throws {
         switch currentState {
-        case .absent, .helperUnavailable, .occupiedByOtherItem:
-            break  // Nothing to remove, or nothing this app may remove.
-        case .pointsToHelper, .pointsElsewhere:
+        case .absent:
+            break  // Nothing to remove.
+        case .pointsToHelper:
             try removeLink()
+        case .pointsElsewhere(let destination):
+            throw CommandLineToolLinkError.linkNotMadeByThisApp(path: linkURL.path,
+                                                                destination: destination)
+        case .occupiedByOtherItem:
+            throw CommandLineToolLinkError.itemInWay(path: linkURL.path)
+        case .helperUnavailable:
+            break  // This build cannot tell its own link from another one, so it touches nothing.
         }
     }
 
@@ -230,6 +242,7 @@ public struct CommandLineToolLink: Equatable, Sendable {
 public enum CommandLineToolLinkError: LocalizedError, Equatable {
     case helperUnavailable(path: String)
     case linkExists(path: String)
+    case linkNotMadeByThisApp(path: String, destination: String)
     case itemInWay(path: String)
     case cannotCreateDirectory(path: String, message: String)
     case cannotCreateLink(path: String, message: String)
@@ -241,6 +254,8 @@ public enum CommandLineToolLinkError: LocalizedError, Equatable {
             return "This Voltscope build has no command line tool at \(path)."
         case .linkExists(let path):
             return "A link to another command is already at \(path). Replace it, or remove it first."
+        case .linkNotMadeByThisApp(let path, let destination):
+            return "The link at \(path) points at \(destination), not at this copy of Voltscope, so it was left in place. Remove it yourself if you want it gone."
         case .itemInWay(let path):
             return "There is something at \(path) that is not a link. Move it out of the way first."
         case .cannotCreateDirectory(let path, let message):

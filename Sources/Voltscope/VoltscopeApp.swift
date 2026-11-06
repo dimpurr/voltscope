@@ -230,6 +230,8 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Removes the link this app made. The core method refuses to touch anything
+    /// else that may sit at the path, so whatever it reports goes on the screen.
     func uninstallCommandLineTool() {
         do {
             try commandLineTool.uninstall()

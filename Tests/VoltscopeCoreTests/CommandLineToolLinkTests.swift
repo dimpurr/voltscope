@@ -177,23 +177,47 @@ final class CommandLineToolLinkTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: linkDirectoryURL.path))
     }
 
-    func testUninstallIsIdempotentAndLeavesForeignItemsAlone() throws {
+    func testUninstallIsIdempotentWhenNothingIsInstalled() throws {
         let link = makeLink()
-        try link.uninstall()  // nothing installed yet
 
+        try link.uninstall()
+        try link.uninstall()
+
+        XCTAssertEqual(link.status().state, .absent)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: linkDirectoryURL.path),
+                       "removing nothing must not create the link directory")
+    }
+
+    func testUninstallRefusesALinkThatPointsElsewhere() throws {
         let other = root.appendingPathComponent("other-tool")
         try Data("other".utf8).write(to: other)
         try FileManager.default.createDirectory(at: linkDirectoryURL, withIntermediateDirectories: true)
+        let link = makeLink()
         try FileManager.default.createSymbolicLink(at: link.linkURL, withDestinationURL: other)
-        try link.uninstall()  // a link the app did not make: unlink it, keep its target
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: link.linkURL.path))
+        XCTAssertThrowsError(try link.uninstall()) { error in
+            XCTAssertEqual(
+                error as? CommandLineToolLinkError,
+                .linkNotMadeByThisApp(path: link.linkURL.path, destination: other.standardizedFileURL.path)
+            )
+        }
+        // A link the user made by hand stays exactly where it is, and so does the
+        // command it points at.
+        XCTAssertEqual(link.status().state, .pointsElsewhere(destinationPath: other.standardizedFileURL.path))
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link.linkURL.path), other.path)
         XCTAssertTrue(FileManager.default.fileExists(atPath: other.path))
+    }
 
+    func testUninstallNeverDeletesAPlainFile() throws {
+        let link = makeLink()
+        try FileManager.default.createDirectory(at: linkDirectoryURL, withIntermediateDirectories: true)
         try Data("my own script".utf8).write(to: link.linkURL)
-        try link.uninstall()  // never delete a plain file
 
-        XCTAssertTrue(FileManager.default.fileExists(atPath: link.linkURL.path))
+        XCTAssertThrowsError(try link.uninstall()) { error in
+            XCTAssertEqual(error as? CommandLineToolLinkError, .itemInWay(path: link.linkURL.path))
+        }
+
+        XCTAssertEqual(try String(contentsOf: link.linkURL, encoding: .utf8), "my own script")
     }
 
     // MARK: - PATH
