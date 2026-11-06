@@ -8,6 +8,13 @@ let package = Package(
     ],
     products: [
         .executable(name: "Voltscope", targets: ["Voltscope"]),
+        // The product is named after its target: SwiftPM renames an executable
+        // product with a linker alias, and an alias for `voltscope` collides
+        // case-insensitively with the `Voltscope` app product on the default
+        // macOS filesystem. The name users type is still `voltscope`: the app
+        // packaging step copies this binary to Contents/Helpers/voltscope, and
+        // Settings links ~/.local/bin/voltscope to that helper.
+        .executable(name: "voltscope-cli", targets: ["voltscope-cli"]),
         .library(name: "VoltscopeCore", targets: ["VoltscopeCore"])
     ],
     dependencies: [
@@ -45,10 +52,20 @@ let package = Package(
             // dependency, so the build works under Command Line Tools where
             // the SDK doesn't ship private framework tbd files.
         ),
+        .executableTarget(
+            name: "voltscope-cli",
+            dependencies: ["VoltscopeCore"],
+            path: "Sources/VoltscopeCLI"
+        ),
         .testTarget(
             name: "VoltscopeCoreTests",
             dependencies: ["VoltscopeCore"],
             path: "Tests/VoltscopeCoreTests"
+        ),
+        .testTarget(
+            name: "VoltscopeCLITests",
+            dependencies: ["voltscope-cli", "VoltscopeCore"],
+            path: "Tests/VoltscopeCLITests"
         )
     ]
 )
