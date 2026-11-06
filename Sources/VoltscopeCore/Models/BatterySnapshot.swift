@@ -50,4 +50,12 @@ public struct BatterySnapshot: Codable, Equatable, Sendable, FetchableRecord, Pe
         guard let mv = voltageMV, let ma = amperageMA else { return nil }
         return Double(mv) * Double(abs(ma)) / 1_000_000.0
     }
+
+    /// Signed instantaneous power in watts: negative while discharging, positive
+    /// while charging. `instantaneousWatts` keeps the magnitude for surfaces that
+    /// state the direction in words. Returns nil when either reading is missing.
+    public var signedInstantaneousWatts: Double? {
+        guard let mv = voltageMV, let ma = amperageMA else { return nil }
+        return Double(mv) * Double(ma) / 1_000_000.0
+    }
 }

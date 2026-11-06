@@ -47,6 +47,28 @@ extension HistoryDatabase {
         public let deleteAfter: Date?
     }
 
+    /// One app's recorded totals over a History window, including wakeups.
+    ///
+    /// `AppBreakdownEntry` is what the History columns render; this adds the
+    /// wakeups column those columns do not show, so a reader that ranks by a
+    /// third signal can do so without a second query path.
+    public struct AppUsageTotal: Sendable, Equatable, Identifiable {
+        public let bundleIdentifier: String?
+        public let processName: String
+        public let path: String?
+        public let totalEnergyNJ: Int64
+        public let totalCPUNS: Int64
+        public let totalWakeups: Int64
+        public let isSystem: Bool
+        public var id: String { AppIdentity.resolve(bundleIdentifier: bundleIdentifier, processName: processName, path: path).groupKey }
+        public init(bundleIdentifier: String?, processName: String, path: String?, totalEnergyNJ: Int64,
+                    totalCPUNS: Int64, totalWakeups: Int64, isSystem: Bool) {
+            self.bundleIdentifier = bundleIdentifier; self.processName = processName; self.path = path
+            self.totalEnergyNJ = totalEnergyNJ; self.totalCPUNS = totalCPUNS
+            self.totalWakeups = totalWakeups; self.isSystem = isSystem
+        }
+    }
+
     public func latestBatterySnapshot() async throws -> BatterySnapshot? {
         try await dbPool.read { db in try BatterySnapshot.order(Column("timestamp").desc).limit(1).fetchOne(db) }
     }
@@ -117,7 +139,29 @@ extension HistoryDatabase {
         }
     }
 
+    /// Per-app totals over the same routed-tier query as `historyAppBreakdown`,
+    /// with recorded wakeups added. Energy and CPU time for a given interval and
+    /// range are the same numbers the History window's Apps column shows, so a
+    /// reader that ranks by wakeups still agrees with the interface.
+    public func historyAppTotals(in interval: DateInterval, range: HistoryRange) async throws -> [AppUsageTotal] {
+        let rows = try await energyRows(in: interval, range: range, metricVersion: EnergyMetric.currentVersion,
+                                        includeZeroEnergy: true)
+        return Dictionary(grouping: rows, by: \.groupKey).map { _, values in
+            let first = values[0]
+            return AppUsageTotal(
+                bundleIdentifier: first.bundleIdentifier, processName: first.displayName, path: first.path,
+                totalEnergyNJ: values.reduce(0) { $0 + $1.energyNJ },
+                totalCPUNS: values.reduce(0) { $0 + $1.cpuNS },
+                totalWakeups: values.reduce(0) { $0 + $1.wakeups },
+                isSystem: AppClassification.isSystem(bundleIdentifier: first.bundleIdentifier,
+                                                     processName: first.displayName, path: first.path))
+        }.sorted { lhs, rhs in
+            lhs.totalEnergyNJ == rhs.totalEnergyNJ ? lhs.id < rhs.id : lhs.totalEnergyNJ > rhs.totalEnergyNJ
+        }
+    }
+
     public func topApps(sinceMinutes minutes: Int, limit: Int = 5, energyAvailable: Bool = true) async throws -> [TopAppEnergy] {
+
         let entries = try await appBreakdown(sinceMinutes: minutes, energyAvailable: energyAvailable)
         return entries.prefix(limit).map {
             TopAppEnergy(bundleIdentifier: $0.bundleIdentifier, processName: $0.processName, path: $0.path,
@@ -367,6 +411,7 @@ private extension HistoryDatabase {
         let path: String?
         let energyNJ: Int64
         let cpuNS: Int64
+        let wakeups: Int64
     }
 
     static func epochMilliseconds(_ date: Date) -> Int64 { Int64(date.timeIntervalSince1970 * 1000) }
@@ -399,13 +444,14 @@ private extension HistoryDatabase {
             let rows = try Row.fetchAll(db, sql: Self.energySQL(range: range, includeZeroEnergy: includeZeroEnergy), arguments: arguments)
             let values = rows.compactMap { row -> EnergyQueryRow? in
                 guard let bucket: Int64 = row["bucketMS"],
-                      let name: String = row["displayName"], let energy: Int64 = row["energyNJ"], let cpu: Int64 = row["cpuNs"] else { return nil }
+                      let name: String = row["displayName"], let energy: Int64 = row["energyNJ"], let cpu: Int64 = row["cpuNs"],
+                      let wakeups: Int64 = row["wakeups"] else { return nil }
                 let bundle: String? = row["bundleIdentifier"]
                 let path: String? = row["path"]
                 let identity = AppIdentity.resolve(bundleIdentifier: bundle, processName: name, path: path)
                 return EnergyQueryRow(bucketMS: bucket, groupKey: identity.groupKey,
                                       bundleIdentifier: bundle, displayName: identity.displayName, path: path,
-                                      energyNJ: energy, cpuNS: cpu)
+                                      energyNJ: energy, cpuNS: cpu, wakeups: wakeups)
             }
             return Self.mergeEnergyRows(values)
         }
@@ -424,7 +470,8 @@ private extension HistoryDatabase {
                                   bundleIdentifier: first.bundleIdentifier, displayName: first.displayName,
                                   path: first.path,
                                   energyNJ: values.reduce(0) { $0 + $1.energyNJ },
-                                  cpuNS: values.reduce(0) { $0 + $1.cpuNS })
+                                  cpuNS: values.reduce(0) { $0 + $1.cpuNS },
+                                  wakeups: values.reduce(0) { $0 + $1.wakeups })
         }.sorted { $0.bucketMS == $1.bucketMS ? $0.groupKey < $1.groupKey : $0.bucketMS < $1.bucketMS }
     }
 
@@ -461,7 +508,7 @@ private extension HistoryDatabase {
     static func energySQL(range: HistoryRange, includeZeroEnergy: Bool = false) -> String {
         if range == .live {
             return """
-                SELECT (r.ts / ?) * ? AS bucketMS, a.groupKey, a.bundleIdentifier, a.displayName, a.path, SUM(r.energyNJ) AS energyNJ, SUM(r.cpuNs) AS cpuNs
+                SELECT (r.ts / ?) * ? AS bucketMS, a.groupKey, a.bundleIdentifier, a.displayName, a.path, SUM(r.energyNJ) AS energyNJ, SUM(r.cpuNs) AS cpuNs, SUM(r.wakeups) AS wakeups
                 FROM AppSampleRaw r JOIN App a ON a.id = r.appId
                 WHERE r.ts >= ? AND r.ts < ? AND r.metricVersion = ?
                 GROUP BY bucketMS, r.appId \(includeZeroEnergy ? "" : "HAVING energyNJ > 0") ORDER BY bucketMS, a.groupKey
@@ -473,14 +520,14 @@ private extension HistoryDatabase {
         let unitMS: Int64 = isHour ? 3_600_000 : 60_000
         return """
             WITH tier AS (
-                SELECT ((u.\(timeCol) * \(unitMS)) / ?) * ? AS bucketMS, u.appId, u.energyNJ, u.cpuNs
+                SELECT ((u.\(timeCol) * \(unitMS)) / ?) * ? AS bucketMS, u.appId, u.energyNJ, u.cpuNs, u.wakeups
                 FROM \(table) u WHERE u.\(timeCol) * \(unitMS) >= ? AND u.\(timeCol) * \(unitMS) < ? AND u.metricVersion = ?
                 UNION ALL
-                SELECT (r.ts / ?) * ? AS bucketMS, r.appId, r.energyNJ, r.cpuNs
+                SELECT (r.ts / ?) * ? AS bucketMS, r.appId, r.energyNJ, r.cpuNs, r.wakeups
                 FROM AppSampleRaw r WHERE r.ts >= ? AND r.ts < ? AND r.metricVersion = ?
                     AND (r.ts >= ? OR r.ts < ? OR r.ts >= ?)
             )
-            SELECT t.bucketMS, a.groupKey, a.bundleIdentifier, a.displayName, a.path, SUM(t.energyNJ) AS energyNJ, SUM(t.cpuNs) AS cpuNs
+            SELECT t.bucketMS, a.groupKey, a.bundleIdentifier, a.displayName, a.path, SUM(t.energyNJ) AS energyNJ, SUM(t.cpuNs) AS cpuNs, SUM(t.wakeups) AS wakeups
             FROM tier t JOIN App a ON a.id = t.appId GROUP BY t.bucketMS, t.appId \(includeZeroEnergy ? "" : "HAVING energyNJ > 0") ORDER BY t.bucketMS, a.groupKey
             """
     }
