@@ -19,10 +19,18 @@ public final class HistoryDatabase: @unchecked Sendable {
     let windowBuffer = HistoryWindowBuffer()
     let windowWriteGate = HistoryWindowWriteGate()
 
-    public init(dbPool: any DatabaseWriter, fileURL: URL? = nil) throws {
+    public convenience init(dbPool: any DatabaseWriter, fileURL: URL? = nil) throws {
+        self.init(unmigrated: dbPool, fileURL: fileURL)
+        try Self.migrator.migrate(dbPool)
+    }
+
+    /// Adopts a connection whose schema is already what this build expects.
+    /// No migrator runs, so nothing is written. Callers must have checked the
+    /// recorded migrations first — see `openReadOnly(url:)`. Internal on
+    /// purpose: every path outside this module must run the migrator.
+    init(unmigrated dbPool: any DatabaseWriter, fileURL: URL?) {
         self.dbPool = dbPool
         self.fileURL = fileURL
-        try Self.migrator.migrate(dbPool)
     }
 
     /// Opens the production database next to the legacy one and brings it up
@@ -74,7 +82,7 @@ public final class HistoryDatabase: @unchecked Sendable {
         return config
     }
 
-    private static var migrator: DatabaseMigrator {
+    static var migrator: DatabaseMigrator {
         var m = DatabaseMigrator()
 
         m.registerMigration("v1_tiered") { db in
