@@ -3,6 +3,9 @@ import Foundation
 import VoltscopeCore
 import UniformTypeIdentifiers
 
+/// The app's half of the CSV export: the save panel and the alert. The streaming
+/// and byte-level formatting live in `VoltscopeCore.CSVExport`, which the
+/// command-line tool also calls, so both write the same file.
 enum CSVExporter {
     /// Presents a save panel and, on confirmation, streams the energy
     /// history for the requested window into a CSV file.
@@ -48,42 +51,6 @@ enum CSVExporter {
     }
 
     private static func writeCSV(database: HistoryDatabase, interval: DateInterval, to url: URL) async throws {
-        let temporaryURL = url.deletingLastPathComponent()
-            .appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).partial")
-        do {
-            guard FileManager.default.createFile(atPath: temporaryURL.path, contents: nil),
-                  let handle = try? FileHandle(forWritingTo: temporaryURL) else {
-                throw NSError(domain: "Voltscope.CSVExporter", code: 1,
-                              userInfo: [NSLocalizedDescriptionKey: "Could not open output file."])
-            }
-            do {
-                let header = HistoryDatabase.CSVSample.columnNames.joined(separator: ",") + "\n"
-                try handle.write(contentsOf: Data(header.utf8))
-
-                let isoFormatter = ISO8601DateFormatter()
-                isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-
-                try await database.forEachHistorySamplesForCSV(in: interval) { batch in
-                    for sample in batch {
-                        try Task.checkCancellation()
-                        let iso = isoFormatter.string(from: Date(timeIntervalSince1970: TimeInterval(sample.timestampMS) / 1000.0))
-                        try handle.write(contentsOf: Data(sample.csvLine(iso8601: iso).utf8))
-                    }
-                }
-                try Task.checkCancellation()
-                try handle.close()
-                if FileManager.default.fileExists(atPath: url.path) {
-                    _ = try FileManager.default.replaceItemAt(url, withItemAt: temporaryURL)
-                } else {
-                    try FileManager.default.moveItem(at: temporaryURL, to: url)
-                }
-            } catch {
-                try? handle.close()
-                throw error
-            }
-        } catch {
-            try? FileManager.default.removeItem(at: temporaryURL)
-            throw error
-        }
+        try await CSVExport.writeReplacingDocument(database: database, interval: interval, to: url)
     }
 }
