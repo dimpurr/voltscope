@@ -48,6 +48,8 @@ public enum AccessibilityIdentifiers {
     public static let settingsOpenLoginItems = "settings.openLoginItems"
     public static let settingsRawRetention = "settings.rawRetention"
     public static let settingsDeleteLegacyDatabase = "settings.deleteLegacyDatabase"
+    public static let settingsInstallCommandLineTool = "settings.installCommandLineTool"
+    public static let settingsUninstallCommandLineTool = "settings.uninstallCommandLineTool"
     public static let welcomeNotNow = "welcome.notNow"
     public static let welcomeDone = "welcome.done"
     public static let welcomeOpenLoginItems = "welcome.openLoginItems"

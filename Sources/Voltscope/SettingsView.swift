@@ -6,6 +6,7 @@ struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
     @State private var showingDeleteConfirmation = false
+    @State private var showingReplaceLinkConfirmation = false
 
     private var launchAtLogin: Binding<Bool> {
         Binding(
@@ -110,15 +111,122 @@ struct SettingsView: View {
                         }
                     }
                 }
+
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Command line tool")
+                        .font(.callout)
+                        .fontWeight(.medium)
+                    Text(commandLineToolStatusLine)
+                        .font(.caption)
+                        .foregroundStyle(Color.accessibleSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+
+                    if case .pointsToHelper = appState.commandLineToolStatus.state,
+                       !appState.commandLineToolStatus.onPath {
+                        Text("If your terminal does not find \(CommandLineToolLink.toolName), add this line to your shell profile:")
+                            .font(.caption)
+                            .foregroundStyle(Color.accessibleSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(appState.commandLineTool.pathExportLine)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    if let message = appState.commandLineToolFeedback {
+                        feedback(
+                            message.message,
+                            symbol: message.isProblem ? "exclamationmark.triangle" : "checkmark.circle"
+                        )
+                    }
+
+                    HStack(spacing: 8) {
+                        Spacer()
+                        Button {
+                            if case .pointsElsewhere = appState.commandLineToolStatus.state {
+                                showingReplaceLinkConfirmation = true
+                            } else {
+                                appState.installCommandLineTool()
+                            }
+                        } label: {
+                            Text("Install Command Line Tool")
+                                .frame(minHeight: HitTarget.minimumSide)
+                                .contentShape(Rectangle())
+                        }
+                        .disabled(!appState.canInstallCommandLineTool)
+                        .accessibilityLabel("Install Command Line Tool")
+                        .accessibilityIdentifier(AccessibilityIdentifiers.settingsInstallCommandLineTool)
+                        .accessibilityHint(
+                            "Creates a link at \(appState.commandLineTool.linkDisplayPath) that runs the tool inside this copy of Voltscope."
+                        )
+                        .confirmationDialog(
+                            "Replace the existing link?",
+                            isPresented: $showingReplaceLinkConfirmation,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Replace Link", role: .destructive) {
+                                appState.installCommandLineTool(overwriteExisting: true)
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text(
+                                "There is already a link at \(appState.commandLineTool.linkDisplayPath) pointing somewhere else. "
+                                    + "Voltscope will replace that link and leave the command it points at alone."
+                            )
+                        }
+
+                        Button {
+                            appState.uninstallCommandLineTool()
+                        } label: {
+                            Text("Uninstall")
+                                .frame(minHeight: HitTarget.minimumSide)
+                                .contentShape(Rectangle())
+                        }
+                        .disabled(!appState.canUninstallCommandLineTool)
+                        .accessibilityLabel("Uninstall command line tool")
+                        .accessibilityIdentifier(AccessibilityIdentifiers.settingsUninstallCommandLineTool)
+                        .accessibilityHint(
+                            "Removes the link at \(appState.commandLineTool.linkDisplayPath). Voltscope keeps the tool inside its own bundle."
+                        )
+                    }
+                }
             }
             .padding(20)
         }
-        .onAppear { appState.refreshLoginItemStatus(); Task { await appState.refreshLegacyImportStatus() } }
+        .onAppear {
+            appState.refreshLoginItemStatus()
+            appState.refreshCommandLineToolStatus()
+            Task { await appState.refreshLegacyImportStatus() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             appState.refreshLoginItemStatus()
+            appState.refreshCommandLineToolStatus()
         }
         .onExitCommand { dismiss() }
         .accessibilityElement(children: .contain)
+    }
+
+    /// One sentence about the link, in the voice of the state the tool is in.
+    private var commandLineToolStatusLine: String {
+        let tool = appState.commandLineTool
+        let status = appState.commandLineToolStatus
+        switch status.state {
+        case .absent:
+            return status.linkDirectoryExists
+                ? "Not installed. Installing puts a link at \(tool.linkDisplayPath)."
+                : "Not installed. Installing creates \(tool.linkDirectoryDisplayPath) and puts the link there."
+        case .pointsToHelper:
+            return "Installed. \(tool.linkDisplayPath) runs the tool inside this copy of Voltscope."
+        case .pointsElsewhere(let destination):
+            return "\(tool.linkDisplayPath) is a link to "
+                + "\(CommandLineToolLink.displayPath(of: URL(fileURLWithPath: destination)))."
+        case .occupiedByOtherItem:
+            return "\(tool.linkDisplayPath) already exists and is not a link. Move it out of the way to install."
+        case .helperUnavailable:
+            return "This copy of Voltscope has no command line tool inside it."
+        }
     }
 
     private func feedback(_ message: String, symbol: String) -> some View {

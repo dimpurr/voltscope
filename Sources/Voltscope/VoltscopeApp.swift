@@ -102,6 +102,19 @@ final class AppState: ObservableObject {
     @Published private(set) var loginItemFeedback: String?
     static let loginOnboardingHandledKey = "loginItemOnboardingHandled"
 
+    /// Where `~/.local/bin/voltscope` points, and whether that directory is on
+    /// PATH. Read on every Settings presentation rather than cached at launch,
+    /// because the user can move or delete the link from a shell at any time.
+    @Published private(set) var commandLineToolStatus: CommandLineToolLink.Status
+    @Published private(set) var commandLineToolFeedback: CommandLineToolFeedback?
+    let commandLineTool: CommandLineToolLink
+
+    /// One line the Settings screen shows after an install or uninstall attempt.
+    struct CommandLineToolFeedback: Equatable {
+        let message: String
+        let isProblem: Bool
+    }
+
     private(set) var database: HistoryDatabase?
     private var coordinator: SamplingCoordinator?
     private var eventListener: EventListener?
@@ -118,6 +131,9 @@ final class AppState: ObservableObject {
         self.loginItemManager = loginItemManager
         self.loginItemStatus = loginItemManager.status
         self.loginItemFeedback = loginItemManager.feedback
+        let commandLineTool = CommandLineToolLink()
+        self.commandLineTool = commandLineTool
+        self.commandLineToolStatus = commandLineTool.status()
         // Sparkle: register the standard updater controller. Its availability
         // is reflected in the menu actions once Sparkle has finished startup.
         self.updaterController = SPUStandardUpdaterController(
@@ -172,6 +188,58 @@ final class AppState: ObservableObject {
 
     func openLoginItems() {
         loginItemManager.openLoginItems()
+    }
+
+    func refreshCommandLineToolStatus() {
+        commandLineToolStatus = commandLineTool.status()
+        commandLineToolFeedback = nil
+    }
+
+    /// Installing is offered when there is free space to put the link, or a link
+    /// of somebody else's that the user can choose to replace. A plain file, and
+    /// a build with no helper, both leave nothing safe to do.
+    var canInstallCommandLineTool: Bool {
+        switch commandLineToolStatus.state {
+        case .absent, .pointsElsewhere: return true
+        case .pointsToHelper, .occupiedByOtherItem, .helperUnavailable: return false
+        }
+    }
+
+    /// Uninstalling is offered only for the link this app made, so the button
+    /// cannot delete a link the user built by hand.
+    var canUninstallCommandLineTool: Bool {
+        if case .pointsToHelper = commandLineToolStatus.state { return true }
+        return false
+    }
+
+    /// Puts the link at `~/.local/bin/voltscope`. A link to another command is
+    /// only replaced after the Settings view has asked the user; anything that
+    /// is not a link is never replaced.
+    func installCommandLineTool(overwriteExisting: Bool = false) {
+        do {
+            commandLineToolStatus = try commandLineTool.install(overwriteExisting: overwriteExisting)
+            commandLineToolFeedback = CommandLineToolFeedback(
+                message: "Added \(commandLineTool.linkDisplayPath) pointing at this copy of Voltscope.",
+                isProblem: false
+            )
+        } catch {
+            commandLineToolStatus = commandLineTool.status()
+            commandLineToolFeedback = CommandLineToolFeedback(
+                message: error.localizedDescription, isProblem: true
+            )
+        }
+    }
+
+    func uninstallCommandLineTool() {
+        do {
+            try commandLineTool.uninstall()
+            commandLineToolFeedback = nil
+        } catch {
+            commandLineToolFeedback = CommandLineToolFeedback(
+                message: error.localizedDescription, isProblem: true
+            )
+        }
+        commandLineToolStatus = commandLineTool.status()
     }
 
     func checkForUpdates() {
