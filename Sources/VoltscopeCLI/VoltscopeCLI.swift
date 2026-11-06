@@ -476,10 +476,11 @@ enum DatabaseLocation {
         return try? AppPaths.historyDatabaseURL(create: false)
     }
 
+    /// The two documented tilde forms, `~` and `~/…`, and nothing else. A `~user`
+    /// path belongs to another account, which this tool has no business reading,
+    /// so it stays the literal path it spells and is reported as missing.
     private static func expanded(_ raw: String) -> URL {
-        guard raw.hasPrefix("~") else { return URL(fileURLWithPath: raw) }
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        if raw == "~" { return URL(fileURLWithPath: home) }
-        return URL(fileURLWithPath: home + raw.dropFirst())
+        guard raw == "~" || raw.hasPrefix("~/") else { return URL(fileURLWithPath: raw) }
+        return URL(fileURLWithPath: (raw as NSString).expandingTildeInPath)
     }
 }

@@ -373,30 +373,32 @@ last recorded anything.
 `--since` takes a whole number with `m`, `h`, or `d`. A window maps to the query
 tier and bucket width the History window would use for the same window, so a
 tool answer and the interface agree; range names and widths remain owned by
-[UI_SPEC.md](UI_SPEC.md). Every command accepts `--json`. The top level always
-carries `schema` (currently `1`), `generatedAt`, `lastSampleAt` (`null` when the
-store holds nothing), and the database path, and every measured field names its
-unit (`energyJ`, `powerW`, `cpuSeconds`). App energy is the recorded CPU energy
-defined in [ENERGY_MODEL.md](ENERGY_MODEL.md); neither the text output nor the
-help presents it as a share of whole-device battery drain. Exit codes are `0`
-answered, `1` usage error, `2` database missing, unreadable, or not a history
-database, `3` database written by a newer Voltscope. `VOLTSCOPE_DB_PATH`
-overrides the file, which is how the tests read a temporary store and how a
-copied database can be inspected.
+[UI_SPEC.md](UI_SPEC.md). The first `history` row is the whole bucket the window
+starts in, so it can begin before `--since`. Every command accepts `--json`. The
+top level always carries `schema` (currently `1`), `generatedAt`, `lastSampleAt`
+(`null` when the store holds nothing), and the database path, and every measured
+field names its unit (`energyJ`, `powerW`, `cpuSeconds`). App energy is the
+recorded CPU energy defined in [ENERGY_MODEL.md](ENERGY_MODEL.md); neither the
+text output nor the help presents it as a share of whole-device battery drain.
+Exit codes are `0` answered, `1` usage error, `2` database missing, unreadable,
+or not a history database, `3` database written by a newer Voltscope.
+`VOLTSCOPE_DB_PATH` overrides the file, which is how the tests read a temporary
+store and how a copied database can be inspected.
 
 **Read-only open.** `HistoryDatabase.openReadOnly(url:)` opens the store with
 GRDB's `Configuration.readonly = true` and never runs the migrator, so it cannot
-create a file, a table, or a `Meta` row, and a missing file is an error rather
-than an invitation. Before reading, it compares the identifiers recorded in
+create a table or a `Meta` row, and a missing file is an error rather than an
+invitation. Before reading, it compares the identifiers recorded in
 `grdb_migrations` with the identifiers this build's migrator registers — the same
 list, so the check cannot drift from the migrations. An identifier this build has
 never seen means the store came from a newer Voltscope and the reader refuses
 (exit 3); a registered identifier the store lacks means the store is behind and
 the app should be started once (exit 2); a file with no `grdb_migrations` table
 is not a history database and is refused, which is also how the legacy
-`db.sqlite` stays unopened. Opening a WAL store read-only may still refresh the
-`history.sqlite-shm` index, which SQLite lets any reader rewrite; the database
-file and its WAL content are unchanged
+`db.sqlite` stays unopened. The database file and its WAL content are not
+written; SQLite may still create or refresh the empty `history.sqlite-wal` and
+`history.sqlite-shm` peer files when it opens a WAL-mode store, even read-only,
+and the `-shm` index is one any reader may rewrite
 ([test: ReadOnlyHistoryDatabaseTests.testReadOnlyOpenReadsHistoryWithoutChangingTheFile]).
 
 **Installing the link.** Packaging builds the tool for both architectures and

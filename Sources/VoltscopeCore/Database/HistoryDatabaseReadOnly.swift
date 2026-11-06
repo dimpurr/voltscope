@@ -56,12 +56,13 @@ extension HistoryDatabase {
     ///
     /// This is the path for a process that must not change the store, such as
     /// the command-line tool. Unlike `init(dbPool:fileURL:)` it never runs the
-    /// migrator, so it cannot create a file, a table, or a `Meta` row; a
-    /// missing path is an error, not an invitation to create one. The recorded
+    /// migrator, so it cannot create a table or a `Meta` row; a missing path is
+    /// an error, not an invitation to create one. The recorded
     /// migrations are checked instead, and an unreadable schema is refused.
     ///
-    /// SQLite still creates the zero-length `-wal` and `-shm` peer files when it
-    /// opens a WAL-mode database, even read-only; those carry no stored data.
+    /// The database file and its WAL content are not written. SQLite may create
+    /// or refresh the empty `-wal` and `-shm` peer files when it opens a
+    /// WAL-mode database, even read-only; they carry no stored data.
     ///
     /// - Throws: `HistoryDatabaseOpenError` when the file is missing, cannot be
     ///   opened, or its schema is not readable by this build.

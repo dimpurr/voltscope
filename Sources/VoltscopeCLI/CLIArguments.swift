@@ -201,7 +201,9 @@ extension CLIRequest {
         }
         switch command {
         case .top, .history:
-            try requiredDuration()
+            // The value itself is not wanted here: reaching the call is the check
+            // that a window was given and parsed.
+            _ = try requiredDuration()
         default:
             break
         }
@@ -249,6 +251,8 @@ enum CLIHelp {
           30m -> 30 second buckets     6h -> 10 minute buckets     7d -> 6 hour buckets
           1h  -> 2 minute buckets      1d -> 30 minute buckets     30d -> 6 hour buckets
         A window between those sizes uses the narrowest range at least as wide.
+        The first history row is the whole bucket the window starts in, so it can
+        begin before --since.
 
         Energy is recorded CPU energy only. It is not a share of whole-device
         battery drain, and hardware buckets are separate measurements that are

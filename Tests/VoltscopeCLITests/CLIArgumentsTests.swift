@@ -107,6 +107,8 @@ final class CLIArgumentsTests: XCTestCase {
         XCTAssertTrue(CLIHelp.text.contains("30 second buckets"))
         XCTAssertTrue(CLIHelp.text.contains("recorded CPU energy only"))
         XCTAssertTrue(CLIHelp.text.contains("3 database newer than this tool"))
+        XCTAssertTrue(CLIHelp.text.contains("begin before --since"),
+                      "the help has to say the first history row can start before --since")
     }
 }
 

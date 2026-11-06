@@ -5,8 +5,8 @@ import XCTest
 
 /// The read-only open is what lets the command-line tool read the app's own
 /// history file without any chance of changing it. These tests pin that promise:
-/// no migration, no write, no created file, and a refusal to read a schema this
-/// build cannot understand.
+/// no migration, no write to the database file or its WAL content, and a refusal
+/// to read a schema this build cannot understand.
 final class ReadOnlyHistoryDatabaseTests: XCTestCase {
     private var temporaryDirectories: [URL] = []
 

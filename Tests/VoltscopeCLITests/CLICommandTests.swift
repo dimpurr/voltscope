@@ -407,6 +407,25 @@ final class CLICommandTests: XCTestCase {
         XCTAssertTrue(help.output.contains("VOLTSCOPE_DB_PATH"))
     }
 
+    func testDatabasePathExpandsOnlyTheDocumentedTildeForms() throws {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+
+        XCTAssertEqual(DatabaseLocation.resolve(environment: ["VOLTSCOPE_DB_PATH": "~"])?.path, home)
+        XCTAssertEqual(
+            DatabaseLocation.resolve(environment: ["VOLTSCOPE_DB_PATH": "~/Library/history.sqlite"])?.path,
+            home + "/Library/history.sqlite"
+        )
+
+        // `~otheruser/…` is some other account's home, which this tool has no
+        // business resolving. It stays the literal path it spells, so the command
+        // reports a missing file instead of quietly reading this user's store.
+        let foreign = try XCTUnwrap(
+            DatabaseLocation.resolve(environment: ["VOLTSCOPE_DB_PATH": "~otheruser/history.sqlite"])
+        )
+        XCTAssertNotEqual(foreign.path, home + "/otheruser/history.sqlite")
+        XCTAssertTrue(foreign.path.hasSuffix("/~otheruser/history.sqlite"), foreign.path)
+    }
+
     func testReadingLeavesTheHistoryFileUntouched() async throws {
         let (url, now) = try await CLIFixture.makeClosed(hours: 3)
         own(url)
