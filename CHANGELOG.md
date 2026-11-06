@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.11.0 — Unreleased
+
+Not published. Nothing here is a release until the DMG and appcast pass the
+publication gate described in `RELEASE.md`.
+
+### Command line tool
+
+- Added a read-only `voltscope` command inside the app bundle: `status`, `top --since <dur>`, `history --since <dur>`, and `export --csv`. Every command accepts `--json` (schema 1, units in the field names), `VOLTSCOPE_DB_PATH` reads another history file, and the exit codes distinguish a usage error, a missing or unreadable database, and a database written by a newer Voltscope. It answers while the app is closed, uses the same queries and bucket widths as the History window, never writes the database, and reports app energy as recorded CPU energy.
+- Added **Install Command Line Tool** and **Uninstall** to Settings. Installing creates `~/.local/bin/voltscope` as a link to the tool inside the app bundle, creating `~/.local/bin` when it is missing and needing no administrator rights. It asks before replacing a link that points at another command, never replaces something that is not a link, reports when `~/.local/bin` is not on `PATH` with the line to add, and stays valid across in-app updates because the bundle path does not change. Uninstall removes the link and nothing else.
+- CSV writing moved into the shared core module so the command line tool and the app's **Export as CSV…** produce identical bytes. The app's save panel, overwrite confirmation, and error alert are unchanged.
+- Added stable accessibility identifiers for the two new Settings controls.
+
 ## 0.10.4 — 2026-10-06
 
 ### Accessibility

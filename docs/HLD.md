@@ -356,6 +356,69 @@ identity are combined per bucket across raw, minute, and hour tiers. The exact
 identity predicate and examples are defined in [App identity for versioned CLI
 executables](#app-identity-for-versioned-cli-executables-current).
 
+### The `voltscope` command line tool (current)
+
+The bundle carries a read-only reader for the same history file. It shares
+`VoltscopeCore` with the interface, so its numbers are the History window's
+numbers, it answers while the app is not running, and it reports when sampling
+last recorded anything.
+
+| Command | What it reads |
+|---------|---------------|
+| `status` | Live battery from `BatterySampler` (charge, signed power, time remaining, health, cycle count, charging state), plus the newest stored battery snapshot and whether it is older than five minutes |
+| `top` | Per-app ranking over a window, by recorded CPU energy unless asked otherwise |
+| `history` | Battery level, power, and app and hardware energy per bucket |
+| `export` | The app's own CSV bytes, through the shared Core writer |
+
+`--since` takes a whole number with `m`, `h`, or `d`. A window maps to the query
+tier and bucket width the History window would use for the same window, so a
+tool answer and the interface agree; range names and widths remain owned by
+[UI_SPEC.md](UI_SPEC.md). Every command accepts `--json`. The top level always
+carries `schema` (currently `1`), `generatedAt`, `lastSampleAt` (`null` when the
+store holds nothing), and the database path, and every measured field names its
+unit (`energyJ`, `powerW`, `cpuSeconds`). App energy is the recorded CPU energy
+defined in [ENERGY_MODEL.md](ENERGY_MODEL.md); neither the text output nor the
+help presents it as a share of whole-device battery drain. Exit codes are `0`
+answered, `1` usage error, `2` database missing, unreadable, or not a history
+database, `3` database written by a newer Voltscope. `VOLTSCOPE_DB_PATH`
+overrides the file, which is how the tests read a temporary store and how a
+copied database can be inspected.
+
+**Read-only open.** `HistoryDatabase.openReadOnly(url:)` opens the store with
+GRDB's `Configuration.readonly = true` and never runs the migrator, so it cannot
+create a file, a table, or a `Meta` row, and a missing file is an error rather
+than an invitation. Before reading, it compares the identifiers recorded in
+`grdb_migrations` with the identifiers this build's migrator registers — the same
+list, so the check cannot drift from the migrations. An identifier this build has
+never seen means the store came from a newer Voltscope and the reader refuses
+(exit 3); a registered identifier the store lacks means the store is behind and
+the app should be started once (exit 2); a file with no `grdb_migrations` table
+is not a history database and is refused, which is also how the legacy
+`db.sqlite` stays unopened. Opening a WAL store read-only may still refresh the
+`history.sqlite-shm` index, which SQLite lets any reader rewrite; the database
+file and its WAL content are unchanged
+([test: ReadOnlyHistoryDatabaseTests.testReadOnlyOpenReadsHistoryWithoutChangingTheFile]).
+
+**Installing the link.** Packaging builds the tool for both architectures and
+places the universal2 binary at `Voltscope.app/Contents/Helpers/voltscope`,
+signing it before the app bundle so the app seals a signed helper. The SwiftPM
+product is named `voltscope-cli`: a product whose name differed from the app
+product only in case could not link on the default case-insensitive filesystem.
+Inside the bundle and on the user's keyboard it is simply `voltscope`.
+**Install Command Line Tool** in Settings creates one symbolic link at
+`~/.local/bin/voltscope` pointing at the helper in this bundle. No administrator
+rights are involved, and the directory is created when it does not exist. The
+button reads the filesystem each time Settings opens and reports what it finds:
+nothing there, a link to this bundle, a link to another command (replaced only
+after the user confirms, and an item that is not a link is never replaced), or a
+build with no helper inside it. When `~/.local/bin` is not on the process `PATH`,
+Settings shows the `export PATH=…` line to add to a shell profile; a login shell
+may already have it, so the line is offered as an instruction rather than a
+warning. **Uninstall** removes the link and nothing else. Because a Sparkle
+update replaces the bundle contents at the same path, the link keeps pointing at
+the current version and needs no reinstall after an update
+([test: CommandLineToolLinkTests.testInstallCreatesTheDirectoryAndALinkToTheHelper]).
+
 ### Storage budget (current estimates)
 
 QA observed about 2.23 million raw process rows/day on Apple silicon and about
@@ -382,6 +445,8 @@ grow slowly.
 | Bundle identifiers | `NSWorkspace.runningApplications` | None | Yes |
 | System sleep/wake events | `NSWorkspace` notifications | None | Yes |
 | Launch at login | `SMAppService.mainApp` | None | Yes |
+| Command line tool reads history | GRDB read-only open (`Configuration.readonly`), no migration | None | Yes |
+| Command line tool link | symbolic link in `~/.local/bin` | None (user's own directory) | Yes |
 | Current system hardware energy buckets | `IOReportHub` via `IOConnect` on all supported macOS versions | No root; private system interface | No (private API) |
 | Planned per-PID GPU time refinement | `powermetrics --show-process-gpu` helper | **Root** | No |
 
@@ -405,7 +470,9 @@ Voltscope ships outside the App Store (Developer ID + notarization) because the 
   release so those clients can discover v0.9.0.
 - **Notarization**: use Apple's notary service when credentials are configured;
   release notes must state the actual result.
-- **Packaging**: the maintained DMG script creates the application bundle.
+- **Packaging**: the maintained DMG script creates the application bundle. The
+  universal2 build also places the signed `voltscope` command line helper under
+  `Contents/Helpers`, which Settings links to from `~/.local/bin`.
 - **Channels**: publish the same verified DMG on the official website and in the
   matching GitHub Release. The checksum must agree.
 - **Update cadence**: patch releases as needed; minor releases when a coherent

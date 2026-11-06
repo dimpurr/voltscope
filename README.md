@@ -89,6 +89,39 @@ depends on activity and sample density rather than a fixed cap.
 - Data stays on the Mac. Voltscope has no telemetry, analytics, or remote crash
   reporting.
 
+## Command line tool
+
+The app bundle includes a read-only `voltscope` command that reads the same
+history the History window shows — while the app is closed, from a script, or as
+JSON.
+
+Install it from the app: open **Settings** and choose **Install Command Line
+Tool**. Voltscope creates a link at `~/.local/bin/voltscope` that runs the copy
+inside the bundle, so no administrator password is involved, and the link keeps
+working after an in-app update. **Uninstall** takes the link back. If your
+terminal does not find the command, Settings shows the `PATH` line to add to your
+shell profile.
+
+```bash
+voltscope status                       # battery now, and the last sample time
+voltscope top --since 1d --limit 5     # busiest apps over the last day
+voltscope history --since 6h           # battery, power, and energy per bucket
+voltscope export --csv --since 1h      # the app's own CSV, on standard output
+voltscope top --since 1d --json        # machine-readable output
+voltscope --help                       # every option, and the exit codes
+```
+
+Every command accepts `--json`. The top level carries the schema version
+(`schema: 1`), when the answer was produced, and when Voltscope last recorded a
+sample, and units are in the field names (`energyJ`, `powerW`, `cpuSeconds`).
+Exit codes are `0` answered, `1` usage error, `2` no readable history database,
+and `3` history written by a newer Voltscope.
+
+The tool never writes the database and reports app energy as recorded CPU energy,
+never as a share of whole-device battery drain. The read-only design, the
+commands, and the `VOLTSCOPE_DB_PATH` override are specified in
+[the architecture guide](docs/HLD.md#the-voltscope-command-line-tool-current).
+
 ## Build from source
 
 Requirements:
