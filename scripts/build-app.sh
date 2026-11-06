@@ -39,17 +39,23 @@ APP_DIR="$ROOT/build/Voltscope.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
+HELPERS="$CONTENTS/Helpers"
 
 FRAMEWORKS="$CONTENTS/Frameworks"
 
 echo "==> Assembling bundle at $APP_DIR"
 rm -rf "$APP_DIR"
-mkdir -p "$MACOS" "$RESOURCES" "$FRAMEWORKS"
+mkdir -p "$MACOS" "$RESOURCES" "$FRAMEWORKS" "$HELPERS"
 
+# The SwiftPM product is named voltscope-cli because a product called `voltscope`
+# would collide case-insensitively with the `Voltscope` app product. Inside the
+# bundle it is the name users type.
 if [ "$UNIVERSAL" -eq 1 ]; then
     lipo -create "$ARM_BIN_PATH/Voltscope" "$X86_BIN_PATH/Voltscope" -output "$MACOS/Voltscope"
+    lipo -create "$ARM_BIN_PATH/voltscope-cli" "$X86_BIN_PATH/voltscope-cli" -output "$HELPERS/voltscope"
 else
     cp "$BIN_PATH/Voltscope" "$MACOS/Voltscope"
+    cp "$BIN_PATH/voltscope-cli" "$HELPERS/voltscope"
 fi
 cp "$ROOT/Sources/Voltscope/Resources/Info.plist" "$CONTENTS/Info.plist"
 cp "$ROOT/Sources/Voltscope/Resources/AppIcon.icns" "$RESOURCES/AppIcon.icns"
@@ -84,7 +90,9 @@ sign_code() {
 
 # Sign nested Mach-O helpers and then their enclosing bundles, inside out.
 # Sparkle includes XPC services and an updater app; signing only the DMG does
-# not make the application distributable.
+# not make the application distributable. The command line tool is a nested
+# Mach-O too, so it has to be signed before the app seals it.
+sign_code "$HELPERS/voltscope"
 while IFS= read -r -d '' file_path; do
     if file -b "$file_path" | grep -q 'Mach-O'; then sign_code "$file_path"; fi
 done < <(find "$FRAMEWORKS" -type f -print0)
@@ -93,9 +101,11 @@ while IFS= read -r -d '' bundle_path; do
 done < <(find "$FRAMEWORKS" -depth -type d \( -name '*.xpc' -o -name '*.app' -o -name '*.framework' -o -name '*.bundle' \) -print0)
 sign_code "$APP_DIR"
 codesign --verify --deep --strict "$APP_DIR"
+codesign --verify --strict "$HELPERS/voltscope"
 
 if [ "$UNIVERSAL" -eq 1 ]; then
     lipo "$MACOS/Voltscope" -verify_arch arm64 x86_64
+    lipo "$HELPERS/voltscope" -verify_arch arm64 x86_64
 fi
 
 echo "==> Done: $APP_DIR"
