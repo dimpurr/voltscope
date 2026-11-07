@@ -7,16 +7,56 @@ public final class BatterySampler: @unchecked Sendable {
     public init() {}
 
     public func sample(at date: Date = Date()) -> BatterySnapshot? {
+        guard let power = readPowerSource() else { return nil }
+        return snapshot(from: power, at: date)
+    }
+
+    /// The same reading with `kIOPSIsChargedKey` attached, for the live layer.
+    ///
+    /// History has no column for "charged" and its schema does not change, so the
+    /// key is read here rather than stored.
+    public func liveSample(at date: Date = Date()) -> LiveBatteryReading? {
+        guard let power = readPowerSource() else { return nil }
+        return LiveBatteryReading(
+            snapshot: snapshot(from: power, at: date),
+            isCharged: power.isCharged
+        )
+    }
+
+    private func snapshot(from power: PowerSourceReading, at date: Date) -> BatterySnapshot {
+        // AppleSmartBattery IORegistry → mAh, mV, mA, temperature, cycle count.
+        let smart = readSmartBattery()
         let timestamp = Int64(date.timeIntervalSince1970 * 1000)
 
-        // 1. Power Sources API → percentage, time remaining, charging state.
-        guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() else { return nil }
-        guard let sources = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef] else { return nil }
+        return BatterySnapshot(
+            timestamp: timestamp,
+            levelPercent: power.levelPercent,
+            capacityMAh: smart.capacityMAh,
+            designMAh: smart.designMAh,
+            cycleCount: smart.cycleCount,
+            voltageMV: smart.voltageMV,
+            amperageMA: smart.amperageMA,
+            temperatureC: smart.temperatureC,
+            timeRemainingMin: power.timeRemainingMin,
+            isCharging: power.isCharging,
+            isACPlugged: power.isACPlugged
+        )
+    }
 
+    private struct PowerSourceReading {
         var levelPercent: Double?
         var timeRemainingMin: Int?
         var isCharging = false
         var isACPlugged = false
+        var isCharged = false
+    }
+
+    /// Power Sources API → percentage, time remaining, charging state.
+    private func readPowerSource() -> PowerSourceReading? {
+        guard let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() else { return nil }
+        guard let sources = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [CFTypeRef] else { return nil }
+
+        var reading = PowerSourceReading()
 
         for source in sources {
             guard let descRef = IOPSGetPowerSourceDescription(blob, source)?.takeUnretainedValue() else { continue }
@@ -31,39 +71,26 @@ public final class BatterySampler: @unchecked Sendable {
             if let current = desc[kIOPSCurrentCapacityKey as String] as? Int,
                let max = desc[kIOPSMaxCapacityKey as String] as? Int,
                max > 0 {
-                levelPercent = (Double(current) / Double(max)) * 100.0
+                reading.levelPercent = (Double(current) / Double(max)) * 100.0
             }
 
             if let powerState = desc[kIOPSPowerSourceStateKey as String] as? String {
-                isACPlugged = (powerState == kIOPSACPowerValue as String)
+                reading.isACPlugged = (powerState == kIOPSACPowerValue as String)
             }
             if let charging = desc[kIOPSIsChargingKey as String] as? Bool {
-                isCharging = charging
+                reading.isCharging = charging
+            }
+            if let charged = desc[kIOPSIsChargedKey as String] as? Bool {
+                reading.isCharged = charged
             }
 
             if let minutes = desc[kIOPSTimeToEmptyKey as String] as? Int, minutes > 0 {
-                timeRemainingMin = minutes
+                reading.timeRemainingMin = minutes
             } else if let minutes = desc[kIOPSTimeToFullChargeKey as String] as? Int, minutes > 0 {
-                timeRemainingMin = minutes
+                reading.timeRemainingMin = minutes
             }
         }
-
-        // 2. AppleSmartBattery IORegistry → mAh, mV, mA, temperature, cycle count.
-        let smart = readSmartBattery()
-
-        return BatterySnapshot(
-            timestamp: timestamp,
-            levelPercent: levelPercent,
-            capacityMAh: smart.capacityMAh,
-            designMAh: smart.designMAh,
-            cycleCount: smart.cycleCount,
-            voltageMV: smart.voltageMV,
-            amperageMA: smart.amperageMA,
-            temperatureC: smart.temperatureC,
-            timeRemainingMin: timeRemainingMin,
-            isCharging: isCharging,
-            isACPlugged: isACPlugged
-        )
+        return reading
     }
 
     private struct SmartBatteryReading {
@@ -119,3 +146,11 @@ public final class BatterySampler: @unchecked Sendable {
         return reading
     }
 }
+
+/// The history loop's sampler seam.
+public protocol BatterySampling: Sendable {
+    func sample(at date: Date) -> BatterySnapshot?
+}
+
+/// The live layer reads the same sampler the history loop uses.
+extension BatterySampler: LiveBatterySampling, BatterySampling {}

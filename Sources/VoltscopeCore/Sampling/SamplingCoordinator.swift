@@ -8,7 +8,7 @@ public actor SamplingCoordinator {
 
     private let database: HistoryDatabase
     private let processSampler: ProcessSampler
-    private let batterySampler: BatterySampler
+    private let batterySampler: any BatterySampling
     private let bucketSampler: BucketSampler
 
     /// Most recent process sampling coverage.
@@ -28,16 +28,22 @@ public actor SamplingCoordinator {
     /// `PowerEvents` rows alongside the battery snapshot stream.
     private var lastBatterySnapshot: BatterySnapshot?
 
+    /// Ledger of the AC state already written. Shared with the live layer when
+    /// the app runs both, so one transition is not written twice.
+    private let plugEvents: PlugEventRecorder
+
     public init(
         database: HistoryDatabase,
         processSampler: ProcessSampler = ProcessSampler(),
-        batterySampler: BatterySampler = BatterySampler(),
-        bucketSampler: BucketSampler = BucketSampler()
+        batterySampler: any BatterySampling = BatterySampler(),
+        bucketSampler: BucketSampler = BucketSampler(),
+        plugEvents: PlugEventRecorder? = nil
     ) {
         self.database = database
         self.processSampler = processSampler
         self.batterySampler = batterySampler
         self.bucketSampler = bucketSampler
+        self.plugEvents = plugEvents ?? PlugEventRecorder(database: database)
     }
 
     public func start() {
@@ -170,8 +176,11 @@ public actor SamplingCoordinator {
         return result.samples.count
     }
 
-    private func runBatteryTick() async {
-        guard let snapshot = batterySampler.sample() else { return }
+    /// One history row plus its transition marker. Split out from the schedule loop
+    /// so a test can drive ticks without waiting for the interval.
+    @discardableResult
+    func runBatteryTick(at date: Date = Date()) async -> BatterySnapshot? {
+        guard let snapshot = batterySampler.sample(at: date) else { return nil }
         do {
             try await database.writeBatterySnapshot(snapshot)
         } catch {
@@ -179,6 +188,7 @@ public actor SamplingCoordinator {
         }
         await emitTransitionEvents(for: snapshot)
         lastBatterySnapshot = snapshot
+        return snapshot
     }
 
     private func runWALCheckpointTick() async {
@@ -208,16 +218,14 @@ public actor SamplingCoordinator {
         return rows.count
     }
 
+    /// Fallback plug/unplug marker from the 30 s cadence. The live layer normally
+    /// writes the marker at notification time, and `PlugEventRecorder` makes this
+    /// call a no-op in that case; when the live layer is not running, or a
+    /// notification was missed across sleep, this still records the transition.
     private func emitTransitionEvents(for current: BatterySnapshot) async {
         guard let previous = lastBatterySnapshot else { return }
-        if previous.isACPlugged != current.isACPlugged {
-            let event = PowerEvent(
-                timestamp: current.timestamp,
-                eventType: current.isACPlugged ? .plug : .unplug
-            )
-            do { try await database.writePowerEvent(event) }
-            catch { logError("AC PowerEvent insert failed: \(error)") }
-        }
+        guard previous.isACPlugged != current.isACPlugged else { return }
+        await plugEvents.record(isACPlugged: current.isACPlugged, timestamp: current.timestamp)
     }
 
     private nonisolated func logError(_ message: String) {
