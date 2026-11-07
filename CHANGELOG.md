@@ -1,9 +1,6 @@
 # Changelog
 
-## 0.11.0 — Unreleased
-
-Not published. Nothing here is a release until the DMG and appcast pass the
-publication gate described in `RELEASE.md`.
+## 0.11.0 — 2026-11-07
 
 ### Command line tool
 
