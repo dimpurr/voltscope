@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.1 - Unreleased
+
+### Live charging state
+
+- The menu bar and the dropdown now follow the charger as it moves. Voltscope listens for the system power-source notification and reads the battery at that moment, so the glyph and the caption change within about a second of plugging in or unplugging — with the dropdown open or closed — instead of waiting for the next history row. Charging state, power and time remaining all lag the physical plug, so the reading is retaken 2, 5 and 10 seconds after the change.
+- The dropdown header now distinguishes `Charging`, `Plugged In, Not Charging`, `Battery Is Charged` and `On Battery`. `Battery Is Charged` is reserved for what the system itself reports as charged, so a charger holding the battery at 80 percent no longer reads as full, and a plug seconds old reads `Plugged In, Starting to Charge…`. Nothing is guessed about *why* charging has not started. The menu bar glyph was a permanent bolt and now shows the state.
+- Opening the dropdown reads the battery immediately and then every 2 s while it stays open, and cancels that refresh the moment it closes. With the dropdown closed nothing new wakes the app: the notification is the only standing listener, and the reads around a plug are finite.
+- VoiceOver hears the new caption when the charging state changes, and the dropdown's charge header carries the stable identifier `menu.chargeState`.
+- History is unchanged: battery rows stay one every 30 s and the database schema is untouched. A plug or unplug adds one event marker, written when the notification is handled, and the slower comparison that used to be the only writer no longer repeats it — so the History plug markers sit at the moment it happened.
+
 ## 0.11.0 — 2026-11-07
 
 ### Command line tool
