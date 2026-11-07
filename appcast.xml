@@ -3,6 +3,15 @@
     <channel>
         <title>Voltscope</title>
         <item>
+            <title>0.11.0</title>
+            <pubDate>Sat, 07 Nov 2026 10:36:34 +0000</pubDate>
+            <link>https://github.com/dimpurr/voltscope/releases</link>
+            <sparkle:version>16</sparkle:version>
+            <sparkle:shortVersionString>0.11.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/dimpurr/voltscope/releases/download/v0.11.0/Voltscope-0.11.0-universal2.dmg" length="11278315" type="application/octet-stream" sparkle:edSignature="MuoRExIOUkxewjBhNpgO6ge9zAqfWn46s79tpJ3yzAUtplh+27QfpCqSMDUklm9CzpSFAk4FF6g76U2phRLSBQ=="/>
+        </item>
+        <item>
             <title>0.10.4</title>
             <pubDate>Tue, 06 Oct 2026 18:13:17 +0100</pubDate>
             <link>https://github.com/dimpurr/voltscope/releases</link>
@@ -19,15 +28,6 @@
             <sparkle:shortVersionString>0.10.3</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
             <enclosure url="https://github.com/dimpurr/voltscope/releases/download/v0.10.3/Voltscope-0.10.3-universal2.dmg" length="6680825" type="application/octet-stream" sparkle:edSignature="NjRq6D+BMVjlNHOBxdVSELwQWBjH7pFi1+dSefUi++/lcf1DS4SdYTI8NzR3QdjGJb8eedVfuU7n+AjOvNAsCg=="/>
-        </item>
-        <item>
-            <title>0.10.2</title>
-            <pubDate>Sun, 04 Oct 2026 10:16:35 +0100</pubDate>
-            <link>https://github.com/dimpurr/voltscope/releases</link>
-            <sparkle:version>13</sparkle:version>
-            <sparkle:shortVersionString>0.10.2</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/dimpurr/voltscope/releases/download/v0.10.2/Voltscope-0.10.2-universal2.dmg" length="6577518" type="application/octet-stream" sparkle:edSignature="An0KJ7mZiOKGpnMPq1Y/1RYFKtgyBDlokCDLF5vubZmHF+0ZuY5+8eNPRlYrkd/O5ZyH0yLg3yjKy3LNDUXXDQ=="/>
         </item>
     </channel>
 </rss>
