@@ -42,7 +42,7 @@
 │  │  ┌────────────────┐  ┌──────────────┐  ┌────────────────┐ ││
 │  │  │ ProcessSampler │  │BatterySampler│  │ EventListener  │ ││
 │  │  │ (see below)    │  │ (see below)  │  │ NSWorkspace +  │ ││
-│  │  │ proc_pid_rusage│  │IOPMPowerSrc  │  │ IOKit notif.   │ ││
+│  │  │ proc_pid_rusage│  │PowerSources  │  │ IOKit notif.   │ ││
 │  │  └────────┬───────┘  └──────┬───────┘  └───────┬────────┘ ││
 │  └───────────┼─────────────────┼──────────────────┼──────────┘ │
 │  ┌───────────▼─────────────────▼──────────────────▼──────────┐│
@@ -74,7 +74,7 @@
 | UI | SwiftUI (minimum target: macOS 13+), SwiftUI Charts, MenuBarExtra (window-style) |
 | State | Swift Observation framework (`@Observable`); minimal Combine bridging |
 | Persistence | GRDB.swift 7.x (SQLite wrapper with type-safe queries, WAL mode, migrations) |
-| Sampling APIs | `proc_pid_rusage(RUSAGE_INFO_V6)`, `proc_listallpids`, `IOPMPowerSource`, `IOReportConnectSampler`, `NSWorkspace.runningApplications` |
+| Sampling APIs | `proc_pid_rusage(RUSAGE_INFO_V6)`, `proc_listallpids`, `IOPSCopyPowerSourcesInfo` + `IOPSNotificationCreateRunLoopSource`, `IOReportConnectSampler`, `NSWorkspace.runningApplications` |
 | Helper IPC | NSXPCConnection (XPC service style), Codable message types |
 | Helper installation | SMAppService, `.daemon(plistName:)` |
 | Main-app login item | ServiceManagement `SMAppService.mainApp`, no helper process |
@@ -292,15 +292,62 @@ Populated only when helper is installed. Contains powermetrics-derived joule rat
 4. For voltage/amperage/temperature: open `IOServiceMatching("AppleSmartBattery")` → read properties.
 5. Insert one `BatteryStatus` row.
 
+This loop is the history record: one row per interval, unchanged by the live layer
+below, and it stays the only writer of `BatteryStatus`.
+
+### Live Battery Layer (event-driven)
+
+History costs up to one interval to notice the charger moved, so the menu bar and
+panel do not read `BatteryStatus`. They read a live state kept in memory by
+`LiveBatteryMonitor`, which is built from three seams — a sampler, a notifier, and
+a time source — so its timing is testable without waiting.
+
+1. `IOPSNotificationCreateRunLoopSource` is attached to the main run loop. Public
+   Power Sources API only; no worker thread and no timer, so a quiet system costs
+   nothing and a closed panel leaves no periodic wakeup behind
+   ([test: LiveBatteryMonitorTests.testStartTakesOneReadingAndArmsNothing]).
+2. Each notification takes one reading through `BatterySampler.liveSample`, which
+   reads the same keys as a history row plus `kIOPSIsChargedKey`. Bursts collapse:
+   the first notification reads at once, later ones inside a 0.25 s quiet window
+   are noted, and one trailing reading is taken when the window closes. Inserting a
+   charger notifies several times in a row, and every reading costs an IORegistry
+   read.
+3. When a reading's AC state differs from the previous one, charging state, power
+   and time remaining all lag the plug itself, so the reading is retaken at +2, +5
+   and +10 s. The last one closes that window
+   ([test: LiveBatteryMonitorTests.testPlugChangeReSamplesAtTwoFiveAndTenSecondsAndEndsTheTransitionalCaption]).
+4. Opening the panel reads once immediately and then every 2 s while it stays open;
+   closing it cancels the cycle
+   ([test: LiveBatteryMonitorTests.testPanelOpenReadsImmediatelyThenEveryTwoSecondsAndCloseStopsIt]).
+   With the panel closed the only waits that can exist are a burst's quiet window
+   and a settle window, and both are finite.
+5. A reading is never written to history. The one database write is the plug or
+   unplug marker, handed to `PlugEventRecorder`.
+6. The charging state itself is derived from `kIOPSPowerSourceStateKey`,
+   `kIOPSIsChargingKey` and `kIOPSIsChargedKey`, with no inference about why
+   charging is not happening: that would need keys Apple does not expose, and a
+   guess is wrong whenever a charger simply holds at 80 percent. Captions and
+   symbols are in UI_SPEC.md.
+7. Until the first reading lands, every surface shows the newest stored row, which
+   is what launch used to do.
+
+`PlugEventRecorder` is the single owner of the AC state already in `PowerEvents`.
+Both marker writers — the live layer at notification time and the history loop,
+comparing rows 30 s apart — ask it first, so one transition writes one row
+([test: PlugEventRecorderTests.testSamplingLoopSkipsAMarkerTheLiveLayerAlreadyWrote]).
+The 30 s comparison stays as the fallback for a transition no notification
+delivered, such as one that happened during sleep.
+
 ### Event Listening (continuous)
 
 | Source | Event | Mapping |
 |--------|-------|---------|
 | `NSWorkspace.shared.notificationCenter` | `.willSleepNotification` | `'sleep'` |
 | `NSWorkspace.shared.notificationCenter` | `.didWakeNotification` | `'wake'` |
-| `IOPMPowerSource` callback | AC source change | `'plug'` / `'unplug'` |
-| `NSProcessInfo.processInfo` | `.thermalStateDidChangeNotification` | metadata field on next event |
-| `pmset -g lowpowermode` polling | Low-power-mode toggle | `'lowpower_on'` / `'lowpower_off'` |
+| `IOPSNotificationCreateRunLoopSource` on the main run loop | AC source change | `'plug'` / `'unplug'`, written while the notification is handled |
+| `SamplingCoordinator` battery tick comparing consecutive rows | AC source change the notification did not deliver | the same `'plug'` / `'unplug'` marker, dropped by `PlugEventRecorder` when it is already on file |
+| `NSProcessInfo.processInfo` `.thermalStateDidChangeNotification` | — | not implemented; no listener exists |
+| `pmset -g lowpowermode` polling | — | not implemented; `'lowpower_on'` / `'lowpower_off'` are reserved values with no writer |
 
 ### Launch at Login Flow (current)
 
@@ -443,7 +490,7 @@ grow slowly.
 | Capability | API | Privilege | Sandbox-compatible |
 |-----------|-----|-----------|-------------------|
 | Per-process CPU / energy / IO | `proc_pid_rusage` | None (own UID) | No (sandbox blocks `proc_*` for other-UID processes) |
-| Battery state | `IOPMPowerSource` | None | Yes |
+| Battery state | `IOPSCopyPowerSourcesInfo` (history) and `IOPSNotificationCreateRunLoopSource` (live) | None | Yes |
 | Bundle identifiers | `NSWorkspace.runningApplications` | None | Yes |
 | System sleep/wake events | `NSWorkspace` notifications | None | Yes |
 | Launch at login | `SMAppService.mainApp` | None | Yes |

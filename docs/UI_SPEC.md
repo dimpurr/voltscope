@@ -8,7 +8,7 @@
 
 | Surface | Spec version | Implementation |
 |---|---|---|
-| Menubar dropdown | v0.9.0 | v0.5.1 disclosure + v0.5.2 inline system process rows + v0.9 action hierarchy |
+| Menubar dropdown | v0.11.1 | v0.5.1 disclosure + v0.5.2 inline system process rows + v0.9 action hierarchy + v0.11.1 live power state |
 | History window | v0.8.1 | Battery-level trace plus range-aware stacked App CPU history, with the v0.6.2 chart-on-top and equal Energy breakdown ½ \| Apps ½ layout preserved; bundle icon uses the Battery scope mark |
 
 The v0.5 history window shipped a SwiftUI Charts stacked **area** chart that aggregated by hour regardless of selected range — for a 1H view with 10 minutes of data this rendered as one solid color block with no time variance, indistinguishable from a bug. v0.5.1 fixes that and reframes the panel around the personas in VISION.md.
@@ -139,6 +139,41 @@ The v0.5 dropdown stays informational and compact. v0.5.1 adds two small enhance
 | Change | Implementation | Why |
 |---|---|---|
 | When the System disclosure is expanded, render the top 5 system processes inline using the same row layout as the user app section, styled muted (0.7 opacity) | `ForEach` over `SystemAppSummary.topItems`; `+ N more in History` hint when more exist | The v0.5.1 expansion only showed a "open History" sentence — the disclosure had no actual content, defeating its purpose. Symmetry with the user app section makes the dropdown predictable |
+
+### Live power state (v0.11.1)
+
+The header answers "what is the battery doing right now", so it reads the live
+power state rather than the newest history row. Architecture and timing are in
+HLD.md ("Live Battery Layer"); this is what the user sees.
+
+| Caption | Glyph | When |
+|---|---|---|
+| `Charging` | ⚡ bolt | The system says it is charging |
+| `Plugged In, Starting to Charge…` | 🔌 plug | Connected, not yet charging, inside the re-sample window that follows the plug |
+| `Plugged In, Not Charging` | 🔌 plug | Connected and not charging, after that window — including an 80 percent hold |
+| `Battery Is Charged` | 🔋 full | Only when the system reports the battery as charged |
+| `On Battery` | 🔋 half | Not connected to power |
+
+Four steady states plus one transitional caption. Nothing guesses at *why*
+charging is not happening: the reason is not in the public Power Sources keys, and
+the caption that used to appear for every connected-but-not-charging state read
+`Battery Is Charged` while the battery sat at 80 percent.
+
+| Rule | Behaviour |
+|---|---|
+| A plug or unplug | The menu bar glyph and the panel header change within about a second, whether the panel is open or closed |
+| Charging text | Settles within 10 s: the caption is retaken at +2, +5 and +10 s after the plug, and the transitional caption stops when the last one lands |
+| Panel open | One reading immediately, then one every 2 s while it stays open |
+| Panel closed | No refresh cycle and no other periodic read. Only a notification can wake the panel's state, plus the finite burst and settle reads above |
+| Launch | The newest stored row shows first, and the live state replaces it as soon as the first reading lands |
+| History | Unchanged. Battery rows stay one per 30 s, and the History window's status bar keeps reading stored rows |
+
+Caption and glyph changes are announced to VoiceOver, the same way the History
+window announces an error, so a connected charger is reported without the panel
+being opened. The header is one accessible element carrying `menu.chargeState`,
+with the percentage in its label and the caption as its value, so nothing is read
+twice ([test: LiveBatteryStateTests.testWordingMatchesTheSpecification],
+[test: AccessibilityIdentifierTests.testMenuBarBatteryValueFormatting]).
 
 ### Out of scope for dropdown (deliberate)
 
