@@ -495,19 +495,34 @@ private final class WindowNamingView: NSView {
         observePanelWindow()
     }
 
-    // No deinit cleanup: `viewDidMoveToWindow` detaches whenever the view leaves a
-    // window, and every observer block holds `self` weakly, so a view that is
-    // released while still attached has nothing left to call.
+    /// Detaches as soon as AppKit says the view is leaving its window. Waiting for
+    /// the next `viewDidMoveToWindow` would leave the three observer blocks
+    /// registered for the process lifetime on a view SwiftUI simply discards,
+    /// because a discarded view never re-attaches.
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        guard newWindow == nil else { return }
+        removePanelWindowObservers()
+        observedWindow = nil
+    }
+
+    // No deinit cleanup: leaving a window detaches the observers, and every
+    // observer block holds `self` weakly, so a view that is released while still
+    // attached has nothing left to call.
 
     private func applyWindowName() {
         guard let windowName else { return }
         window?.setAccessibilityTitle(windowName)
     }
 
-    private func observePanelWindow() {
-        guard window !== observedWindow else { return }
+    private func removePanelWindowObservers() {
         observers.forEach { NotificationCenter.default.removeObserver($0) }
         observers.removeAll()
+    }
+
+    private func observePanelWindow() {
+        guard window !== observedWindow else { return }
+        removePanelWindowObservers()
         observedWindow = window
         guard let window else { return }
         let center = NotificationCenter.default

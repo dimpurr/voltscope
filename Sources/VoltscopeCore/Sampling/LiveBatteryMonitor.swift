@@ -55,11 +55,13 @@ public final class LiveBatteryMonitor {
     public private(set) var isRunning = false
     public private(set) var isPanelOpen = false
 
-    /// Waits currently armed. Zero means nothing can wake this process until
-    /// either a notification arrives or the panel opens; tests use it to prove
-    /// that a closed panel leaves no periodic wakeup behind.
+    /// Waits currently armed: the settle re-samples that still have to run, plus a
+    /// quiet window and the panel refresh cycle if either is open. Zero means
+    /// nothing can wake this process until either a notification arrives or the
+    /// panel opens; tests use it to prove that a closed panel leaves no periodic
+    /// wakeup behind, and cross-check it against their own clock.
     public var armedWaitCount: Int {
-        var count = settleRemaining
+        var count = settleWorks.filter { !$0.work.isCancelled }.count
         if let quietWindowWork, !quietWindowWork.isCancelled { count += 1 }
         if let panelRefreshWork, !panelRefreshWork.isCancelled { count += 1 }
         return count
@@ -74,8 +76,16 @@ public final class LiveBatteryMonitor {
 
     private var lastObservedACPlugged: Bool?
     private var settleDeadline: Date?
-    private var settleWorks: [ScheduledBatteryWork] = []
-    private var settleRemaining = 0
+    /// The settle re-samples that are armed and have not run yet: a re-sample takes
+    /// its own entry out of this list the moment it fires. Reads that are not settle
+    /// work — a panel refresh or a burst's trailing read — never spend one of them.
+    private var settleWorks: [SettleWork] = []
+    private var settleToken = 0
+
+    private struct SettleWork {
+        let token: Int
+        let work: ScheduledBatteryWork
+    }
 
     private var quietWindowWork: ScheduledBatteryWork?
     private var notificationAbsorbed = false
@@ -184,20 +194,24 @@ public final class LiveBatteryMonitor {
             return
         }
         settleDeadline = timeline.now.addingTimeInterval(lastDelay)
-        settleRemaining = timing.settleDelays.count
         for delay in timing.settleDelays {
-            settleWorks.append(timeline.schedule(after: delay) { [weak self] in
-                guard let self, self.isRunning, self.settleRemaining > 0 else { return }
-                self.settleRemaining -= 1
+            settleToken += 1
+            let token = settleToken
+            let work = timeline.schedule(after: delay) { [weak self] in
+                // A re-sample stops being an armed wait the instant it runs, and a
+                // read that came from anywhere else cannot shorten this list: the
+                // window is the plug change's, not the panel's or the burst's.
+                guard let self, self.isRunning else { return }
+                self.settleWorks.removeAll { $0.token == token }
                 self.sampleNow()
-            })
+            }
+            settleWorks.append(SettleWork(token: token, work: work))
         }
     }
 
     private func cancelSettleWindow() {
-        settleWorks.forEach { $0.cancel() }
+        settleWorks.forEach { $0.work.cancel() }
         settleWorks.removeAll()
-        settleRemaining = 0
     }
 
     private var isSettlingAfterPlugChange: Bool {

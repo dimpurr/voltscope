@@ -168,6 +168,39 @@ final class PlugEventRecorderTests: XCTestCase {
         XCTAssertEqual(batteryRows, 3)
     }
 
+    func testALaunchReadingInTheLedgerAbsorbsTheFirstHistoryPair() async throws {
+        // The app starts the live monitor before the sampling loop
+        // (Sources/Voltscope/VoltscopeApp.swift) so the ledger already holds the AC
+        // state the run started in by the time the loop can compare two of its own
+        // rows. A first row that misreads the AC source is then absorbed.
+        let adoptedDB = try HistoryDatabase.makeInMemory()
+        let adoptedRecorder = PlugEventRecorder(database: adoptedDB)
+        await adoptedRecorder.adopt(isACPlugged: true)
+        let adoptedSampler = ScriptedHistorySampler()
+        adoptedSampler.isACPlugged = false
+        let adoptedCoordinator = SamplingCoordinator(database: adoptedDB, batterySampler: adoptedSampler, plugEvents: adoptedRecorder)
+        await adoptedCoordinator.runBatteryTick(at: base)
+        adoptedSampler.isACPlugged = true
+        await adoptedCoordinator.runBatteryTick(at: base.addingTimeInterval(30))
+
+        let adoptedEvents = try await rows(adoptedDB, "SELECT eventType FROM PowerEvents ORDER BY timestamp")
+        XCTAssertTrue(adoptedEvents.isEmpty, "the pair never left the state the run started in")
+        let adoptedRows = try await count(adoptedDB, "SELECT COUNT(*) FROM BatteryStatus")
+        XCTAssertEqual(adoptedRows, 2, "the 30 s history rows are written either way")
+
+        // The same pair against an empty ledger is the row the start-up order removes.
+        let blindDB = try HistoryDatabase.makeInMemory()
+        let blindSampler = ScriptedHistorySampler()
+        blindSampler.isACPlugged = false
+        let blindCoordinator = SamplingCoordinator(database: blindDB, batterySampler: blindSampler)
+        await blindCoordinator.runBatteryTick(at: base)
+        blindSampler.isACPlugged = true
+        await blindCoordinator.runBatteryTick(at: base.addingTimeInterval(30))
+
+        let blindEvents = try await rows(blindDB, "SELECT eventType FROM PowerEvents ORDER BY timestamp")
+        XCTAssertEqual(blindEvents, ["plug"], "with nothing to compare against, the first pair is a plug")
+    }
+
     private func rows(_ db: HistoryDatabase, _ sql: String) async throws -> [String] {
         try await db.dbPool.read { conn in try String.fetchAll(conn, sql: sql) }
     }

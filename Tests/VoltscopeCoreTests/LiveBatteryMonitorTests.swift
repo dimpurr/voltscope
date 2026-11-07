@@ -392,6 +392,56 @@ final class LiveBatteryMonitorTests: XCTestCase {
         XCTAssertEqual(f.lastState, .charging)
     }
 
+    func testReadsInsideTheSettleWindowSpendNoneOfTheSettleReSamples() {
+        let f = LiveLayerFixture()
+        let monitor = f.monitor()
+        monitor.start()
+        let start = f.clock.now
+
+        f.power(.plugged)
+        f.notifier.emit()
+        f.notifier.emit()
+        f.advance(0.25)
+        XCTAssertEqual(f.samples, 3, "the burst's trailing read is taken inside the settle window")
+        XCTAssertEqual(monitor.armedWaitCount, f.clock.pendingWaitCount)
+        XCTAssertEqual(monitor.armedWaitCount, 3, "all three settle re-samples are still armed")
+
+        monitor.panelOpened()
+        XCTAssertEqual(f.samples, 4, "opening the panel reads once, also inside the window")
+        XCTAssertEqual(monitor.armedWaitCount, f.clock.pendingWaitCount)
+        XCTAssertEqual(monitor.armedWaitCount, 4, "three settle re-samples plus the refresh cycle")
+
+        f.advance(1.75)
+        XCTAssertEqual(f.samples, 5, "the +2 re-sample runs even though two other reads came first")
+        XCTAssertEqual(monitor.armedWaitCount, f.clock.pendingWaitCount)
+        XCTAssertEqual(monitor.armedWaitCount, 3)
+
+        f.advance(0.25)
+        XCTAssertEqual(f.samples, 6, "the panel tick and the +2 re-sample are two separate reads")
+        XCTAssertEqual(monitor.armedWaitCount, f.clock.pendingWaitCount)
+        XCTAssertEqual(monitor.armedWaitCount, 3)
+
+        f.advance(2.75)
+        XCTAssertEqual(f.samples, 8, "and the +5 re-sample is there too")
+        XCTAssertEqual(monitor.armedWaitCount, f.clock.pendingWaitCount)
+        XCTAssertEqual(monitor.armedWaitCount, 2)
+
+        f.advance(5)
+        let expected: [TimeInterval] = [0, 0, 0.25, 0.25, 2, 2.25, 4.25, 5, 6.25, 8.25, 10]
+        XCTAssertEqual(f.offsets(from: start), expected,
+                       "the settle window keeps its own +2/+5/+10 reads whatever else reads")
+        XCTAssertEqual(f.lastState, .pluggedNotCharging, "the +10 read still closes the window")
+        XCTAssertEqual(monitor.armedWaitCount, f.clock.pendingWaitCount)
+        XCTAssertEqual(monitor.armedWaitCount, 1, "only the panel's own cycle is left")
+
+        monitor.panelClosed()
+        XCTAssertEqual(monitor.armedWaitCount, 0)
+        XCTAssertEqual(f.clock.pendingWaitCount, 0)
+        let samples = f.samples
+        f.advance(30)
+        XCTAssertEqual(f.samples, samples)
+    }
+
     // MARK: Panel refresh
 
     func testPanelOpenReadsImmediatelyThenEveryTwoSecondsAndCloseStopsIt() {

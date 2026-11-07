@@ -342,7 +342,6 @@ final class AppState: ObservableObject {
             let plugEvents = PlugEventRecorder(database: db)
             let coord = SamplingCoordinator(database: db, plugEvents: plugEvents)
             self.coordinator = coord
-            await coord.start()
             let notifier = IOPSPowerSourceNotifier()
             self.powerSourceNotifier = notifier
             let monitor = LiveBatteryMonitor(
@@ -353,7 +352,13 @@ final class AppState: ObservableObject {
                 onReading: { [weak self] reading in self?.liveBattery = reading }
             )
             self.liveMonitor = monitor
+            // The monitor has to reach the recorder before the history loop does:
+            // its first reading adopts the AC state the app started in, and until it
+            // does the recorder has no state to compare a transition against. Starting
+            // the 30 s loop first would let its own two snapshots be the first thing
+            // the ledger ever saw, which writes a marker for a move nobody observed.
             monitor.start()
+            await coord.start()
             Task.detached(priority: .utility) {
                 _ = try? await db.deleteLegacyDatabaseIfExpired(at: legacyURL)
             }
