@@ -9,6 +9,9 @@ public enum AccessibilityIdentifiers {
     public static let menuCheckForUpdates = "menu.checkForUpdates"
     public static let menuQuit = "menu.quit"
     public static let menuSystemProcesses = "menu.systemProcesses"
+    /// The panel's charge header: caption, symbol, percentage and progress bar,
+    /// exposed as one element whose value changes with the live power state.
+    public static let menuChargeState = "menu.chargeState"
     public static func menuOpenAppInHistory(appIdentity: String) -> String {
         "menu.openAppInHistory.\(appIdentity)"
     }
@@ -77,20 +80,15 @@ public enum AccessibilityLabels {
         "Open History from \(name)"
     }
 
-    public static func menuBarBatteryValue(levelPercent: Double?, isCharging: Bool, isACPlugged: Bool) -> String {
+    public static func menuBarBatteryValue(levelPercent: Double?, chargeState: BatteryChargeState?) -> String {
         guard let level = levelPercent else {
             return "Battery status unavailable"
         }
         let percent = Int(level.rounded())
-        let state: String
-        if isCharging {
-            state = "charging"
-        } else if isACPlugged {
-            state = "on AC power"
-        } else {
-            state = "on battery"
+        guard let chargeState else {
+            return "\(percent) percent"
         }
-        return "\(percent) percent, \(state)"
+        return "\(percent) percent, \(chargeState.spokenName)"
     }
 
     public static func menuBarAppRowValue(energyNJ: Int64, cpuNS: Int64, energyAvailable: Bool) -> String {

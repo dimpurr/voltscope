@@ -10,6 +10,7 @@ final class AccessibilityIdentifierTests: XCTestCase {
             AccessibilityIdentifiers.menuCheckForUpdates,
             AccessibilityIdentifiers.menuQuit,
             AccessibilityIdentifiers.menuSystemProcesses,
+            AccessibilityIdentifiers.menuChargeState,
             AccessibilityIdentifiers.historyTimeRange,
             AccessibilityIdentifiers.historyDisplayOptions,
             AccessibilityIdentifiers.historyGroupSystemProcesses,
@@ -46,6 +47,7 @@ final class AccessibilityIdentifierTests: XCTestCase {
             "menu.checkForUpdates",
             "menu.quit",
             "menu.systemProcesses",
+            "menu.chargeState",
             "history.timeRange",
             "history.displayOptions",
             "history.groupSystemProcesses",
@@ -108,19 +110,23 @@ final class AccessibilityIdentifierTests: XCTestCase {
 
     func testMenuBarBatteryValueFormatting() {
         XCTAssertEqual(
-            AccessibilityLabels.menuBarBatteryValue(levelPercent: nil, isCharging: false, isACPlugged: false),
+            AccessibilityLabels.menuBarBatteryValue(levelPercent: nil, chargeState: .onBattery),
             "Battery status unavailable"
         )
         XCTAssertEqual(
-            AccessibilityLabels.menuBarBatteryValue(levelPercent: 85.4, isCharging: true, isACPlugged: true),
+            AccessibilityLabels.menuBarBatteryValue(levelPercent: 85.4, chargeState: .charging),
             "85 percent, charging"
         )
         XCTAssertEqual(
-            AccessibilityLabels.menuBarBatteryValue(levelPercent: 100.0, isCharging: false, isACPlugged: true),
-            "100 percent, on AC power"
+            AccessibilityLabels.menuBarBatteryValue(levelPercent: 100.0, chargeState: .charged),
+            "100 percent, battery is charged"
         )
         XCTAssertEqual(
-            AccessibilityLabels.menuBarBatteryValue(levelPercent: 42.1, isCharging: false, isACPlugged: false),
+            AccessibilityLabels.menuBarBatteryValue(levelPercent: 80.0, chargeState: .pluggedNotCharging),
+            "80 percent, plugged in but not charging"
+        )
+        XCTAssertEqual(
+            AccessibilityLabels.menuBarBatteryValue(levelPercent: 42.1, chargeState: .onBattery),
             "42 percent, on battery"
         )
     }

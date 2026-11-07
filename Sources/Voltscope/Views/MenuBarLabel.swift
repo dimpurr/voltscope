@@ -6,7 +6,8 @@ struct MenuBarLabel: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: "bolt.fill")
+            Image(systemName: symbolName)
+                .accessibilityHidden(true)
             Text(displayString)
         }
         .accessibilityElement(children: .ignore)
@@ -15,17 +16,22 @@ struct MenuBarLabel: View {
         .accessibilityIdentifier(AccessibilityIdentifiers.menuBarItem)
     }
 
+    /// The glyph now carries the power state: a bolt while charging, a plug while
+    /// connected but not charging, and a battery while charged or on battery. It
+    /// used to be a permanent bolt, which said nothing when the state changed.
+    private var symbolName: String {
+        appState.displayedChargeState?.symbolName ?? "bolt.slash"
+    }
+
     private var accessibilityValue: String {
-        let battery = appState.lastBattery
-        return AccessibilityLabels.menuBarBatteryValue(
-            levelPercent: battery?.levelPercent,
-            isCharging: battery?.isCharging ?? false,
-            isACPlugged: battery?.isACPlugged ?? false
+        AccessibilityLabels.menuBarBatteryValue(
+            levelPercent: appState.displayedBattery?.levelPercent,
+            chargeState: appState.displayedChargeState
         )
     }
 
     private var displayString: String {
-        if let level = appState.lastBattery?.levelPercent {
+        if let level = appState.displayedBattery?.levelPercent {
             return "\(Int(level.rounded()))%"
         }
         return "—"

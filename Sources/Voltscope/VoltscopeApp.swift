@@ -80,6 +80,9 @@ struct SystemAppSummary: Equatable {
 @MainActor
 final class AppState: ObservableObject {
     @Published var lastBattery: BatterySnapshot?
+    /// Live power state from `LiveBatteryMonitor`. Empty until the first live
+    /// sample, which is why `displayedBattery` falls back to `lastBattery`.
+    @Published var liveBattery: LiveBatteryReading?
     @Published var topApps: [HistoryDatabase.TopAppEnergy] = []
     @Published var systemSummary: SystemAppSummary = .empty
     @Published var statusText: String = "Starting…"
@@ -102,6 +105,24 @@ final class AppState: ObservableObject {
     @Published private(set) var loginItemFeedback: String?
     static let loginOnboardingHandledKey = "loginItemOnboardingHandled"
 
+    /// Battery state every surface should draw: the live reading once there is
+    /// one, otherwise the newest history row. That keeps launch behaviour as it
+    /// was — a stored row shows immediately — while a plug or unplug lands from
+    /// the live layer within about a second instead of on the next history row.
+    var displayedBattery: BatterySnapshot? { liveBattery?.snapshot ?? lastBattery }
+
+    /// Charge state matching `displayedBattery`. The stored row has no "charged"
+    /// column, so only a live reading can say "Battery Is Charged".
+    var displayedChargeState: BatteryChargeState? {
+        if let liveBattery { return liveBattery.chargeState }
+        guard let lastBattery else { return nil }
+        return BatteryChargeState.resolve(
+            isACPlugged: lastBattery.isACPlugged,
+            isCharging: lastBattery.isCharging,
+            isCharged: false
+        )
+    }
+
     /// Where `~/.local/bin/voltscope` points, and whether that directory is on
     /// PATH. Read on every Settings presentation rather than cached at launch,
     /// because the user can move or delete the link from a shell at any time.
@@ -118,6 +139,8 @@ final class AppState: ObservableObject {
     private(set) var database: HistoryDatabase?
     private var coordinator: SamplingCoordinator?
     private var eventListener: EventListener?
+    private var liveMonitor: LiveBatteryMonitor?
+    private var powerSourceNotifier: IOPSPowerSourceNotifier?
     private var refreshTask: Task<Void, Never>?
     private let loginItemManager: LoginItemManager
     private var updateCheckTask: Task<Void, Never>?
@@ -316,9 +339,21 @@ final class AppState: ObservableObject {
                     await self?.refreshLegacyImportStatus()
                 }
             }
-            let coord = SamplingCoordinator(database: db)
+            let plugEvents = PlugEventRecorder(database: db)
+            let coord = SamplingCoordinator(database: db, plugEvents: plugEvents)
             self.coordinator = coord
             await coord.start()
+            let notifier = IOPSPowerSourceNotifier()
+            self.powerSourceNotifier = notifier
+            let monitor = LiveBatteryMonitor(
+                sampler: BatterySampler(),
+                notifier: notifier,
+                timeline: SleepingBatteryTimeSource(),
+                plugEvents: plugEvents,
+                onReading: { [weak self] reading in self?.liveBattery = reading }
+            )
+            self.liveMonitor = monitor
+            monitor.start()
             Task.detached(priority: .utility) {
                 _ = try? await db.deleteLegacyDatabaseIfExpired(at: legacyURL)
             }
@@ -350,9 +385,24 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// The menu bar panel opened: read the battery now, then every two seconds
+    /// while it stays open. Before history is open the monitor does not exist yet,
+    /// and it takes the first reading on start with the panel already flagged open.
+    func panelOpened() {
+        liveMonitor?.panelOpened()
+    }
+
+    /// The menu bar panel closed. This is what leaves no periodic wakeup behind.
+    func panelClosed() {
+        liveMonitor?.panelClosed()
+    }
+
     func stopSamplingForTermination() async -> Bool {
         refreshTask?.cancel()
         refreshTask = nil
+        liveMonitor?.stop()
+        liveMonitor = nil
+        powerSourceNotifier = nil
         guard let coordinator else { return true }
         if await coordinator.stop() {
             self.coordinator = nil

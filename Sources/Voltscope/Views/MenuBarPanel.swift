@@ -17,11 +17,36 @@ struct MenuBarPanel: View {
         .frame(width: MenuBarPanelLayout.width, alignment: .top)
         .frame(minHeight: MenuBarPanelLayout.maximumCollapsedHeight, alignment: .top)
         .background {
-            PanelWindowName(title: AccessibilityLabels.panelWindowTitle)
+            PanelWindowName(
+                title: AccessibilityLabels.panelWindowTitle,
+                onOpen: { appState.panelOpened() },
+                onClose: { appState.panelClosed() }
+            )
         }
         .onExitCommand {
             NSApp.keyWindow?.orderOut(nil)
             NSApp.deactivate()
+        }
+        .onChange(of: appState.displayedChargeState) { state in
+            guard let state else { return }
+            announceChargeState(state)
+        }
+    }
+
+    /// Reads the power-state caption and glyph to assistive technology when they
+    /// change, the same way the History window announces an error. Without this a
+    /// VoiceOver user hears nothing when a charger is connected.
+    private func announceChargeState(_ state: BatteryChargeState) {
+        let message = state.announcementText
+        if #available(macOS 14.0, *) {
+            AccessibilityNotification.Announcement(message).post()
+        } else {
+            let element: Any = (NSApp.keyWindow ?? NSApp) as Any
+            NSAccessibility.post(
+                element: element,
+                notification: .announcementRequested,
+                userInfo: [.announcement: message, .priority: NSAccessibilityPriorityLevel.medium.rawValue]
+            )
         }
     }
 
@@ -65,7 +90,9 @@ struct MenuBarPanel: View {
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(batteryAccessibilityLabel)
-            ProgressView(value: (appState.lastBattery?.levelPercent ?? 0) / 100.0)
+            .accessibilityValue(chargeStateText)
+            .accessibilityIdentifier(AccessibilityIdentifiers.menuChargeState)
+            ProgressView(value: (appState.displayedBattery?.levelPercent ?? 0) / 100.0)
                 .progressViewStyle(.linear)
                 .tint(chargeColor)
                 .accessibilityHidden(true)
@@ -86,39 +113,38 @@ struct MenuBarPanel: View {
     }
 
     private var chargeSymbol: String {
-        guard let battery = appState.lastBattery else { return "bolt.slash" }
-        if battery.isCharging { return "bolt.fill" }
-        if battery.isACPlugged { return "powerplug.fill" }
-        return "battery.50"
+        appState.displayedChargeState?.symbolName ?? "bolt.slash"
     }
 
     private var chargeColor: Color {
-        guard let battery = appState.lastBattery, let level = battery.levelPercent else { return .secondary }
-        if battery.isCharging || battery.isACPlugged { return .green }
+        guard let state = appState.displayedChargeState else { return .secondary }
+        if state.isConnectedToPower { return .green }
+        guard let level = appState.displayedBattery?.levelPercent else { return .secondary }
         if level < 20 { return .red }
         if level < 40 { return .orange }
         return .green
     }
 
+    /// The four states plus the transitional caption inside the settle window.
+    /// Wording is owned by docs/UI_SPEC.md. "Battery Is Charged" now needs the
+    /// system's charged key: any plugged-in-but-not-charging state, such as a
+    /// charger holding at 80 percent, says so instead.
     private var chargeStateText: String {
-        guard let battery = appState.lastBattery else { return "Battery" }
-        if battery.isCharging { return "Charging" }
-        if battery.isACPlugged { return "Battery Is Charged" }
-        return "On Battery"
+        appState.displayedChargeState?.displayName ?? "Battery"
     }
 
     private var percentText: String {
-        guard let level = appState.lastBattery?.levelPercent else { return "—" }
+        guard let level = appState.displayedBattery?.levelPercent else { return "—" }
         return "\(Int(level.rounded()))%"
     }
 
     private var timeRemainingText: String {
-        guard let battery = appState.lastBattery, let minutes = battery.timeRemainingMin, minutes > 0 else {
+        guard let battery = appState.displayedBattery, let minutes = battery.timeRemainingMin, minutes > 0 else {
             return "—"
         }
         let h = minutes / 60
         let m = minutes % 60
-        let suffix = battery.isCharging ? "until full" : "until empty"
+        let suffix = appState.displayedChargeState == .charging ? "until full" : "until empty"
         if h > 0 {
             return String(format: "%dh %02dm %@", h, m, suffix)
         }
@@ -152,7 +178,7 @@ struct MenuBarPanel: View {
     }
 
     private var healthRatio: Double? {
-        guard let battery = appState.lastBattery,
+        guard let battery = appState.displayedBattery,
               let capacity = battery.capacityMAh,
               let design = battery.designMAh,
               design > 0 else { return nil }
@@ -160,8 +186,8 @@ struct MenuBarPanel: View {
     }
 
     private var batteryAccessibilityLabel: String {
-        let level = appState.lastBattery?.levelPercent.map { "\(Int($0.rounded())) percent" } ?? "unknown charge"
-        return "Battery \(level), \(chargeStateText.lowercased())"
+        let level = appState.displayedBattery?.levelPercent.map { "\(Int($0.rounded())) percent" } ?? "charge unavailable"
+        return "Battery \(level)"
     }
 
     private var healthPercentAccessibilityValue: String {
@@ -170,7 +196,7 @@ struct MenuBarPanel: View {
     }
 
     private var temperatureAccessibilityValue: String {
-        guard let celsius = appState.lastBattery?.temperatureC else { return "unavailable" }
+        guard let celsius = appState.displayedBattery?.temperatureC else { return "unavailable" }
         let fahrenheit = celsius * 9 / 5 + 32
         return String(format: "%.1f degrees Celsius, %.1f degrees Fahrenheit", celsius, fahrenheit)
     }
@@ -181,20 +207,20 @@ struct MenuBarPanel: View {
     }
 
     private var cycleText: String {
-        guard let cycles = appState.lastBattery?.cycleCount else { return "—" }
+        guard let cycles = appState.displayedBattery?.cycleCount else { return "—" }
         return "\(cycles)"
     }
 
     private var conditionText: String {
         BatteryCondition.classify(
-            cycleCount: appState.lastBattery?.cycleCount,
-            capacityMAh: appState.lastBattery?.capacityMAh,
-            designMAh: appState.lastBattery?.designMAh
+            cycleCount: appState.displayedBattery?.cycleCount,
+            capacityMAh: appState.displayedBattery?.capacityMAh,
+            designMAh: appState.displayedBattery?.designMAh
         ).rawValue
     }
 
     private var temperatureText: String {
-        guard let celsius = appState.lastBattery?.temperatureC else { return "—" }
+        guard let celsius = appState.displayedBattery?.temperatureC else { return "—" }
         let fahrenheit = celsius * 9 / 5 + 32
         return String(format: "%.1f °C / %.1f °F", celsius, fahrenheit)
     }
@@ -423,21 +449,33 @@ struct MenuBarPanel: View {
     }
 }
 
-/// Names the panel's window for assistive technology. A `MenuBarExtra` popover
-/// window has no title of its own, so assistive technology announces the panel
-/// without a name at all; the title is applied when the hosting view joins the
-/// window.
+/// Names the panel's window for assistive technology and reports when the panel
+/// is on screen. A `MenuBarExtra` popover window has no title of its own, so
+/// assistive technology announces the panel without a name at all; the title is
+/// applied when the hosting view joins the window.
+///
+/// `MenuBarExtra` offers no open or close callback. The panel's own hosting window
+/// is the signal: it becomes key while the dropdown is up — the panel's Escape and
+/// command-key handling already depends on that — and resigns key when the dropdown
+/// goes away, including when a button in it opens another window.
 private struct PanelWindowName: NSViewRepresentable {
     let title: String
+    let onOpen: () -> Void
+    let onClose: () -> Void
 
     func makeNSView(context: Context) -> NSView {
         let view = WindowNamingView()
         view.windowName = title
+        view.onOpen = onOpen
+        view.onClose = onClose
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        (nsView as? WindowNamingView)?.windowName = title
+        guard let view = nsView as? WindowNamingView else { return }
+        view.windowName = title
+        view.onOpen = onOpen
+        view.onClose = onClose
     }
 }
 
@@ -445,15 +483,47 @@ private final class WindowNamingView: NSView {
     var windowName: String? {
         didSet { applyWindowName() }
     }
+    var onOpen: (() -> Void)?
+    var onClose: (() -> Void)?
+
+    private var observedWindow: NSWindow?
+    private var observers: [NSObjectProtocol] = []
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         applyWindowName()
+        observePanelWindow()
     }
+
+    // No deinit cleanup: `viewDidMoveToWindow` detaches whenever the view leaves a
+    // window, and every observer block holds `self` weakly, so a view that is
+    // released while still attached has nothing left to call.
 
     private func applyWindowName() {
         guard let windowName else { return }
         window?.setAccessibilityTitle(windowName)
+    }
+
+    private func observePanelWindow() {
+        guard window !== observedWindow else { return }
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
+        observers.removeAll()
+        observedWindow = window
+        guard let window else { return }
+        let center = NotificationCenter.default
+        observers = [
+            center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) {
+                [weak self] _ in Task { @MainActor in self?.onOpen?() }
+            },
+            center.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) {
+                [weak self] _ in Task { @MainActor in self?.onClose?() }
+            },
+            center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) {
+                [weak self] _ in Task { @MainActor in self?.onClose?() }
+            }
+        ]
+        // The window can become key before this view joins it.
+        if window.isKeyWindow { onOpen?() }
     }
 }
 
