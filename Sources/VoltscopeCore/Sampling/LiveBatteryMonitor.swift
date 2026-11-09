@@ -280,8 +280,11 @@ public final class LiveBatteryMonitor {
     }
 
     /// Waits for plug markers this monitor handed to the recorder. The writes run
-    /// off the main actor on purpose; this is the seam tests use instead of a sleep.
-    func waitForPlugMarkers() async {
+    /// off the main actor on purpose; this is the seam tests use instead of a
+    /// sleep, and the quit path uses it to let a marker land before the history
+    /// flush. It waits as long as the writes do, so a caller that must not block
+    /// indefinitely bounds the wait itself.
+    public func waitForPlugMarkers() async {
         let pending = markerTasks
         markerTasks.removeAll()
         for task in pending { await task.value }

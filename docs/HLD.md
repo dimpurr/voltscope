@@ -304,7 +304,10 @@ a time source — so its timing is testable without waiting.
 
 1. `IOPSNotificationCreateRunLoopSource` is attached to the main run loop. Public
    Power Sources API only; no worker thread and no timer, so a quiet system costs
-   nothing and a closed panel leaves no periodic wakeup behind
+   nothing and a closed panel leaves no periodic wakeup behind. That claim covers
+   these live power-state reads only: `AppState`'s own refresh loop, which reloads
+   the newest history row and the top-apps breakdown every five seconds, keeps
+   running whether the panel is open or not
    ([test: LiveBatteryMonitorTests.testStartTakesOneReadingAndArmsNothing]).
 2. Each notification takes one reading through `BatterySampler.liveSample`, which
    reads the same keys as a history row plus `kIOPSIsChargedKey`. Bursts collapse:

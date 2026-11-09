@@ -140,6 +140,11 @@ final class AppState: ObservableObject {
     private var coordinator: SamplingCoordinator?
     private var eventListener: EventListener?
     private var liveMonitor: LiveBatteryMonitor?
+    /// Set when the panel asks to open while `liveMonitor` does not exist yet —
+    /// the dropdown can appear in the first few milliseconds of launch, while
+    /// `bootstrap()` is still working. Cleared on close and applied when the
+    /// monitor is created, so that open is not dropped.
+    private var panelOpenPending = false
     private var powerSourceNotifier: IOPSPowerSourceNotifier?
     private var refreshTask: Task<Void, Never>?
     private let loginItemManager: LoginItemManager
@@ -352,6 +357,14 @@ final class AppState: ObservableObject {
                 onReading: { [weak self] reading in self?.liveBattery = reading }
             )
             self.liveMonitor = monitor
+            // The panel can already have been opened while this bootstrap was
+            // running: `panelOpened()` had no monitor to tell back then, so the
+            // open was kept in `panelOpenPending`. Applying it before `start()`
+            // lets that first reading take the open-panel path, which arms the
+            // 2 s cycle with the panel already flagged open.
+            if panelOpenPending {
+                monitor.panelOpened()
+            }
             // The monitor has to reach the recorder before the history loop does:
             // its first reading adopts the AC state the app started in, and until it
             // does the recorder has no state to compare a transition against. Starting
@@ -391,14 +404,21 @@ final class AppState: ObservableObject {
     }
 
     /// The menu bar panel opened: read the battery now, then every two seconds
-    /// while it stays open. Before history is open the monitor does not exist yet,
-    /// and it takes the first reading on start with the panel already flagged open.
+    /// while it stays open. Before history is open the monitor does not exist
+    /// yet, so the request is remembered and applied when the monitor is
+    /// created — it then takes the first reading on start with the panel
+    /// already flagged open.
     func panelOpened() {
-        liveMonitor?.panelOpened()
+        if let liveMonitor {
+            liveMonitor.panelOpened()
+        } else {
+            panelOpenPending = true
+        }
     }
 
     /// The menu bar panel closed. This is what leaves no periodic wakeup behind.
     func panelClosed() {
+        panelOpenPending = false
         liveMonitor?.panelClosed()
     }
 
@@ -406,6 +426,12 @@ final class AppState: ObservableObject {
         refreshTask?.cancel()
         refreshTask = nil
         liveMonitor?.stop()
+        if let monitor = liveMonitor {
+            // A plug that landed just before quit can still be writing its
+            // `PowerEvents` row; let that write finish before the coordinator
+            // flushes below, but never wait longer than the bound.
+            await Self.waitForPlugMarkers(monitor)
+        }
         liveMonitor = nil
         powerSourceNotifier = nil
         guard let coordinator else { return true }
@@ -417,6 +443,32 @@ final class AppState: ObservableObject {
         await coordinator.start()
         startRefreshLoop()
         return false
+    }
+
+    /// Upper bound on how long quit waits for the monitor's in-flight plug
+    /// markers: one second. A marker is one short SQLite commit that normally
+    /// lands in milliseconds, so this wait returns almost at once in practice;
+    /// the bound exists so a wedged write can delay the exit by at most one
+    /// second instead of hanging it. Past the bound the flush proceeds with
+    /// whatever has landed — the same race the code had before this wait
+    /// existed, just far less likely to lose.
+    private static let plugMarkerWaitBound: UInt64 = 1_000_000_000
+
+    /// Waits for the plug-marker writes `monitor` handed to the recorder, or
+    /// for `plugMarkerWaitBound`, whichever comes first.
+    private static func waitForPlugMarkers(_ monitor: LiveBatteryMonitor) async {
+        let gate = PlugMarkerWaitGate()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            gate.arm(continuation)
+            Task { @MainActor in
+                await monitor.waitForPlugMarkers()
+                gate.finish()
+            }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: plugMarkerWaitBound)
+                gate.finish()
+            }
+        }
     }
 
     func refreshNow() async {
@@ -486,5 +538,35 @@ final class AppState: ObservableObject {
                 }
             }
         }
+    }
+}
+
+/// Resumes a checked continuation exactly once: whichever of the plug-marker
+/// wait or the quit bound gets there first wins and the loser's resume is
+/// ignored, so `stopSamplingForTermination` can never hang on a stuck write.
+/// Lock-guarded rather than main-actor isolated so it can be armed from the
+/// `withCheckedContinuation` body whatever isolation that body runs with.
+private final class PlugMarkerWaitGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var finished = false
+
+    func arm(_ continuation: CheckedContinuation<Void, Never>) {
+        lock.lock()
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func finish() {
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return
+        }
+        finished = true
+        let continuation = self.continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume()
     }
 }

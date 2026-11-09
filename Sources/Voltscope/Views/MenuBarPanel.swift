@@ -504,6 +504,10 @@ private final class WindowNamingView: NSView {
         guard newWindow == nil else { return }
         removePanelWindowObservers()
         observedWindow = nil
+        // The observers are gone from this point on, so a resign-key that has
+        // not reached its block yet never will; report the close from here
+        // instead, through the same ordered hop every other delivery uses.
+        deliverClose()
     }
 
     // No deinit cleanup: leaving a window detaches the observers, and every
@@ -528,17 +532,33 @@ private final class WindowNamingView: NSView {
         let center = NotificationCenter.default
         observers = [
             center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) {
-                [weak self] _ in Task { @MainActor in self?.onOpen?() }
+                [weak self] _ in self?.deliverOpen()
             },
             center.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) {
-                [weak self] _ in Task { @MainActor in self?.onClose?() }
+                [weak self] _ in self?.deliverClose()
             },
             center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) {
-                [weak self] _ in Task { @MainActor in self?.onClose?() }
+                [weak self] _ in self?.deliverClose()
             }
         ]
         // The window can become key before this view joins it.
-        if window.isKeyWindow { onOpen?() }
+        if window.isKeyWindow { deliverOpen() }
+    }
+
+    /// Hands `onOpen` / `onClose` to SwiftUI one main-queue turn later instead
+    /// of running them in place. Calling them from `viewDidMoveToWindow`,
+    /// `viewWillMove(toWindow:)` or a window notification can publish
+    /// `liveBattery` from inside a view update. Every delivery goes through
+    /// this one hop, and `DispatchQueue.main` runs its blocks in the order they
+    /// were enqueued, so an open and a close keep the order AppKit reported
+    /// them in: a close that arrives after an open is delivered after it and
+    /// wins, which is what stops the 2 s refresh cycle on a quick open→close.
+    nonisolated private func deliverOpen() {
+        DispatchQueue.main.async { @MainActor [weak self] in self?.onOpen?() }
+    }
+
+    nonisolated private func deliverClose() {
+        DispatchQueue.main.async { @MainActor [weak self] in self?.onClose?() }
     }
 }
 
