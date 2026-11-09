@@ -19,9 +19,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.11.0</string>
+    <string>0.11.1</string>
     <key>CFBundleVersion</key>
-    <string>16</string>
+    <string>17</string>
     <!-- Replace this release-preparation placeholder with the public half of
          the EdDSA key kept by the maintainer. Never commit the private key. -->
     <key>SUPublicEDKey</key>
